@@ -6,7 +6,47 @@ A web interface for this project is available at https://organoid-profiler.com/
 This code accompanies the manuscript entitled:
 "Automated, high-throughput and quantitative morphological characterization uncovers conserved longitudinal developmental kinetics in microfluidics-engineered organoids" by Galan et al. Under review at Nature Communications. 
 
-# **Researcher's Guide: Automated Organoid Analysis**
+# **Welcome to Organoid Profiler**
+
+## **Installation instructions**
+
+These are the installation instructions to be able to run the code and the jupyter notebook. In this repo, we have included the server that is available with a easy-to-use user interface on this [website](https://organoid-profiler.com/) . 
+
+### Create the Conda Environment
+
+```bash
+# create the environment
+conda create -n orgprofiler python=3.11 -y
+
+# activate the environment
+conda activate orgprofiler
+```
+
+### Use Conda to Install Scientific Packages
+
+```bash
+# install scientific packages with conda
+conda install -c conda-forge numpy scipy scikit-image matplotlib pillow -y
+```
+
+### Install All Other Packages Using pip
+
+```bash
+# install the remaining dependencies with pip
+pip install cellpose torch fastapi uvicorn pydantic-settings supabase loguru python-dotenv httpx
+```
+
+### (Optional) Jupyter Notebook Setup
+
+If you are planning on running the Jupyter notebook, run the following commands:
+
+```bash
+# install the kernel
+pip install ipykernel numpy
+
+# register the kernel; you can then select "orgprofiler" environment to run the Jupyter notebook
+python -m ipykernel install --user --name=orgprofiler --display-name "Org Profiler"
+```
 
 ## **What is this tool?**
 
