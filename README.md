@@ -10,7 +10,7 @@ This code accompanies the manuscript entitled:
 
 ## **Installation instructions**
 
-These are the installation instructions to be able to run the code and the jupyter notebook. In this repo, we have included the server that is available with a easy-to-use user interface on this [website](https://organoid-profiler.com/) . 
+These are the installation instructions to be able to run the code and the jupyter notebook. In this repo, we have included the code on the server that is available with a easy-to-use user interface on this [website](https://organoid-profiler.com/) . 
 
 ### Create the Conda Environment
 
@@ -33,7 +33,7 @@ conda install -c conda-forge numpy scipy scikit-image matplotlib pillow -y
 
 ```bash
 # install the remaining dependencies with pip
-pip install cellpose torch fastapi uvicorn pydantic-settings supabase loguru python-dotenv httpx
+pip install cellpose==2.0.2 torch fastapi uvicorn pydantic-settings supabase loguru python-dotenv httpx
 ```
 
 ### (Optional) Jupyter Notebook Setup
