@@ -78,8 +78,15 @@ from fastapi.exception_handlers import http_exception_handler
 
 api.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], allow_credentials=True,
-    allow_methods=["*"], allow_headers=["*"],
+    allow_origins=[
+        "http://organoid-profiler.com",
+        "https://organoid-profiler.com",
+        "http://47.84.122.79",
+        "http://47.84.122.79:8000",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 @api.get("/healthz")
@@ -435,6 +442,7 @@ async def process_job(run_id: str, filename: str, file_data: bytes, analysis_typ
         if is_baseline:
             payload["results"]["growth_rate"] = 1.0
 
+        # Ensure growth_rate is in both casing formats for frontend compatibility
         gr_val = payload["results"].get("growth_rate")
         payload["results"]["growthRate"] = gr_val
         
