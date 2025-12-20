@@ -141,11 +141,23 @@ async def run_analysis(img: np.ndarray, params: Dict[str, Any], timings: Dict[st
         
         with timed(timings, "postprocess_s"):
             area_value = float(payload["results"]["area"])
-            growth_rate = 1.0 if day in ("0", 0) else (area_value / float(day0_area) if day0_area else None)
+            
+            # Robust Day 0 check
+            is_baseline = str(day) in ("0", "00", "0.0", "0.00", "d00", "d0", "d0.0")
+            
+            if is_baseline:
+                growth_rate = 1.0
+            elif day0_area:
+                try:
+                    growth_rate = float(area_value) / float(day0_area)
+                except (ValueError, ZeroDivisionError, TypeError):
+                    growth_rate = None
+            else:
+                growth_rate = None
 
             payload["results"].update({
-                "day": day,
-                "organoidNumber": organoid_number,
+                "day": str(day) if day is not None else "0",
+                "organoidNumber": str(organoid_number) if organoid_number is not None else "1",
                 "growth_rate": growth_rate,
                 "type": analysis_type,
                 "analyze_s": timings.get("analyze_total_s"),
@@ -390,19 +402,26 @@ from fastapi import BackgroundTasks
 async def process_job(run_id: str, filename: str, file_data: bytes, analysis_type: str, pixel_size_um: float, 
                       day: Optional[str], organoid_number: Optional[str], day0_area: Optional[float],
                       advanced_params: dict = None, segmentation_method: str = "fiji", 
-                      timings: dict = None):
+                      timings: dict = None, total_files: int = None):
     try:
         if timings is None: timings = {}
         
-        # If day0_area is missing and it's not day 0, try to find it in the DB
-        if day0_area is None and day not in ("0", 0) and run_id and organoid_number:
-            try:
-                res = supabase.table("analysis_results").select("area").eq("run_id", run_id).eq("organoid_number", organoid_number).eq("day", "0").execute()
-                if res.data:
-                    day0_area = res.data[0]["area"]
-                    logger.info(f"Found Day 0 area ({day0_area}) for organoid {organoid_number} in DB")
-            except Exception as e:
-                logger.warning(f"Failed to lookup Day 0 area: {e}")
+        # Normalize day and organoid_number to strings
+        day_str = str(day) if day is not None else "0"
+        org_num_str = str(organoid_number) if organoid_number is not None else "1"
+        
+        logger.info(f"PROCESSING JOB: {filename} | Run: {run_id} | Organoid: {org_num_str} | Day: {day_str}")
+
+        is_day_0 = day_str in ("0", "00", "0.0", "0.00", "d00", "d0")
+        
+        is_baseline = is_day_0
+
+        if day0_area is None and not is_day_0 and run_id and org_num_str:
+            res = supabase.table("analysis_results").select("area").eq("run_id", run_id).eq("day", "0").execute()
+            logger.info(f"DAY 0 RES: {res.data}")
+            if res.data:
+                day0_area = res.data[0]["area"]
+                logger.info(f"BASELINE FOUND: Using Day 0 area ({day0_area}) for organoid {org_num_str}")
 
         img = np.array(Image.open(io.BytesIO(file_data)).convert("RGB"))
         
@@ -411,32 +430,41 @@ async def process_job(run_id: str, filename: str, file_data: bytes, analysis_typ
         if advanced_params:
             params.update(advanced_params)
         
-        payload = await run_analysis(img, params, timings, "ASYNC", False, day, day0_area, organoid_number, analysis_type, segmentation_method=segmentation_method)
+        payload = await run_analysis(img, params, timings, "ASYNC", False, day_str, day0_area, org_num_str, analysis_type, segmentation_method=segmentation_method)
+        
+        if is_baseline:
+            payload["results"]["growth_rate"] = 1.0
+
+        gr_val = payload["results"].get("growth_rate")
+        payload["results"]["growthRate"] = gr_val
         
         row = await persist_one_result(run_id, filename, payload)
         supabase.table("analysis_results").insert(row).execute()
-        logger.info(f"Job completed and saved: {filename} in run {run_id}")
+        
+        logger.info(f"JOB COMPLETED: {filename} | Area: {payload['results'].get('area')} | Growth Rate: {gr_val}")
 
-        # If this was Day 0, update any other results for the same organoid that are missing growth_rate
-        if day in ("0", 0) and run_id and organoid_number:
+        # If this was a baseline day, update any other results for the same organoid
+        if is_baseline and run_id and org_num_str:
             try:
                 area_value = float(payload["results"]["area"])
-                # Find other days for this organoid
-                # We fetch everything for this organoid in this run that isn't the current record
-                res = supabase.table("analysis_results").select("id, area, day, results_json").eq("run_id", run_id).eq("organoid_number", organoid_number).execute()
+                logger.info(f"BASELINE DETECTED ({day_str}): Triggering backfill for organoid {org_num_str}")
+                
+                # Fetch sibling records
+                res = supabase.table("analysis_results").select("id, area, day, results_json").eq("run_id", run_id).eq("organoid_number", org_num_str).execute()
                 
                 updates = 0
                 for other in res.data:
-                    # Skip the day 0 record itself (which we just inserted)
-                    if str(other["day"]) in ("0", 0):
+                    # Skip the baseline record itself
+                    if str(other["day"]) == day_str:
                         continue
                         
                     other_area = float(other["area"])
                     gr = other_area / area_value if area_value > 0 else 1.0
                     
-                    # Update column AND JSON to ensure frontend sees it regardless of where it looks
+                    # Update column AND JSON
                     rj = other.get("results_json") or {}
                     rj["growth_rate"] = gr
+                    rj["growthRate"] = gr
                     
                     supabase.table("analysis_results").update({
                         "growth_rate": gr,
@@ -445,25 +473,34 @@ async def process_job(run_id: str, filename: str, file_data: bytes, analysis_typ
                     updates += 1
                     
                 if updates > 0:
-                    logger.info(f"Backfilled growth rates for {updates} results (organoid {organoid_number}) using Day 0 area {area_value}")
+                    logger.info(f"BACKFILL SUCCESS: Updated {updates} sibling results for organoid {org_num_str}")
             except Exception as e:
-                logger.warning(f"Failed to trigger growth rate backfill: {e}")
+                logger.error(f"BACKFILL ERROR: {e}")
 
         # Check if run is complete (all jobs for this run are finished)
         try:
-            run_res = supabase.table("analysis_runs").select("total_files").eq("id", run_id).single().execute()
-            if run_res.data and run_res.data.get("total_files"):
-                total = run_res.data["total_files"]
+            # Try to get total from function argument or DB
+            total = total_files
+            if total is None:
+                run_res = supabase.table("analysis_runs").select("total_files").eq("id", run_id).single().execute()
+                if run_res.data:
+                    total = run_res.data.get("total_files")
+            
+            if total:
                 count_res = supabase.table("analysis_results").select("id", count="exact").eq("run_id", run_id).execute()
-                if count_res.count >= total:
-                    logger.info(f"Run {run_id} complete ({count_res.count}/{total} jobs). Updating status.")
+                current_count = count_res.count or 0
+                logger.info(f"Run {run_id} progress: {current_count}/{total}")
+                
+                if current_count >= total:
+                    logger.info(f"Run {run_id} is COMPLETELY FINISHED. Updating status in Supabase.")
                     supabase.table("analysis_runs").update({
                         "status": "completed", 
                         "completed_at": datetime.datetime.now(datetime.timezone.utc).isoformat()
                     }).eq("id", run_id).execute()
+            else:
+                logger.warning(f"Could not determine total_files for run {run_id}. Completion check skipped.")
         except Exception as e:
-            # Column total_files might not exist, ignore
-            pass
+            logger.error(f"Error during completion check: {e}")
 
     except Exception as e:
         logger.error(f"Job failed: {filename} in run {run_id}: {e}")
@@ -508,8 +545,23 @@ async def submit_jobs(
             except ValueError:
                 advanced_params[target_key] = value
 
+    # Create a list of (file, metadata) tuples and sort by day
+    # This ensures Day 0 is processed first, which is better for growth rate calculation
+    job_items = []
     for i, file in enumerate(files):
         m = meta_list[i] if i < len(meta_list) else {}
+        job_items.append((file, m))
+    
+    def get_day_val(item):
+        try:
+            return int(item[1].get("day", 0))
+        except (ValueError, TypeError):
+            return 999 # Put unknown days at the end
+
+    job_items.sort(key=get_day_val)
+
+    total_count = len(files)
+    for file, m in job_items:
         # Read file data before spawning background task to avoid "read of closed file" error
         timings = {}
         with timed(timings, "upload_read_s"):
@@ -521,7 +573,8 @@ async def submit_jobs(
             m.get("day"), m.get("organoid_number"), m.get("day0_area"),
             advanced_params,
             segmentation_method,
-            timings
+            timings,
+            total_count
         )
     
     # Update total_files count if the column exists
