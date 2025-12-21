@@ -9,7 +9,7 @@ from loguru import logger
 
 from .imaging import convert_rgb_to_grayscale_uint8, convert_array_to_data_url_png
 from .profiling import time_block, ResourceProfiler
-from .segmentation import build_segmentation_mask_fiji_style, build_segmentation_mask_cyto2
+from .segmentation import build_segmentation_mask_fiji_style, build_segmentation_mask_cpsam
 from .metrics import calculate_feret_features_from_points
 from .background import estimate_background_from_ring
 
@@ -36,7 +36,13 @@ def analyze_image(
     background_mode: Literal["ring", "inverse_of_composite"],
     object_is_dark: bool,
     ignore_zero_bins_for_mode_min: bool = False,
-    segmentation_method: Literal["fiji", "cyto2"] = "fiji",
+    segmentation_method: Literal["fiji", "cpsam"] = "fiji",
+    # Cellpose 4 / Custom model parameters
+    cellpose_model_type: str = "cpsam",
+    cellpose_pretrained_model: Optional[str] = None,
+    cellpose_diameter: Optional[float] = None,
+    cellpose_flow_threshold: float = 0.4,
+    cellpose_cellprob_threshold: float = 0.0,
 ) -> Dict[str, Any]:
     """Core analysis logic for both brightfield and fluorescence images."""
     H, W, _ = img.shape
@@ -47,10 +53,15 @@ def analyze_image(
 
     flow_image_base64 = ""
     with time_block("segmentation"):
-        if segmentation_method == "cyto2":
-            res = build_segmentation_mask_cyto2(
+        if segmentation_method == "cpsam":
+            res = build_segmentation_mask_cpsam(
                 image_rgb=img,
                 return_flows=return_images,
+                model_type=cellpose_model_type,
+                pretrained_model=cellpose_pretrained_model,
+                diameter=cellpose_diameter,
+                flow_threshold=cellpose_flow_threshold,
+                cellprob_threshold=cellpose_cellprob_threshold,
             )
             if isinstance(res, tuple):
                 mask_bool, flow_img = res

@@ -114,6 +114,11 @@ def brightfield_defaults() -> Dict[str, Any]:
         select_strategy="largest", area_filter_px=None,
         background_mode="ring", object_is_dark=True,
         ignore_zero_bins_for_mode_min=False,
+        cellpose_model_type="cpsam",
+        cellpose_pretrained_model=None,
+        cellpose_diameter=None,
+        cellpose_flow_threshold=0.4,
+        cellpose_cellprob_threshold=0.0,
     )
 
 def fluorescence_defaults() -> Dict[str, Any]:
@@ -126,6 +131,11 @@ def fluorescence_defaults() -> Dict[str, Any]:
         select_strategy="composite_filtered", area_filter_px=33_000,
         background_mode="inverse_of_composite", object_is_dark=False,
         ignore_zero_bins_for_mode_min=True,
+        cellpose_model_type="cpsam",
+        cellpose_pretrained_model=None,
+        cellpose_diameter=None,
+        cellpose_flow_threshold=0.4,
+        cellpose_cellprob_threshold=0.0,
     )
 
 # ----------------------------
@@ -199,6 +209,11 @@ async def analyze_brightfield(
     day: Optional[str] = Query(None),
     organoid_number: Optional[str] = Query(None),
     segmentation_method: str = Query("fiji"),
+    cellpose_model_type: str = Query("cpsam"),
+    cellpose_pretrained_model: Optional[str] = Query(None),
+    cellpose_diameter: Optional[float] = Query(None),
+    cellpose_flow_threshold: float = Query(0.4),
+    cellpose_cellprob_threshold: float = Query(0.0),
 ):
     timings = {}
     with timed(timings, "upload_read_s"):
@@ -208,9 +223,16 @@ async def analyze_brightfield(
         img = np.array(Image.open(io.BytesIO(data)).convert("RGB"))
 
     params = brightfield_defaults()
-    params.update(sigma_pre=sigma_pre, dilate_iter=dilate_iter, erode_iter=erode_iter,
-                  min_area_px=min_area_px, min_circ=min_circ, edge_margin=edge_margin,
-                  pixel_size_um=pixel_size_um, return_images=return_images)
+    params.update(
+        sigma_pre=sigma_pre, dilate_iter=dilate_iter, erode_iter=erode_iter,
+        min_area_px=min_area_px, min_circ=min_circ, edge_margin=edge_margin,
+        pixel_size_um=pixel_size_um, return_images=return_images,
+        cellpose_model_type=cellpose_model_type,
+        cellpose_pretrained_model=cellpose_pretrained_model,
+        cellpose_diameter=cellpose_diameter,
+        cellpose_flow_threshold=cellpose_flow_threshold,
+        cellpose_cellprob_threshold=cellpose_cellprob_threshold
+    )
 
     return await run_analysis(img, params, timings, "BF", profile, day, day0_area, organoid_number, "brightfield", segmentation_method=segmentation_method)
 
@@ -228,6 +250,11 @@ async def analyze_fluorescence(
     day: Optional[str] = Query(None),
     organoid_number: Optional[str] = Query(None),
     segmentation_method: str = Query("fiji"),
+        cellpose_model_type: str = Query("cpsam"),
+    cellpose_pretrained_model: Optional[str] = Query(None),
+    cellpose_diameter: Optional[float] = Query(None),
+    cellpose_flow_threshold: float = Query(0.4),
+    cellpose_cellprob_threshold: float = Query(0.0),
 ):
     timings = {}
     with timed(timings, "upload_read_s"):
@@ -237,8 +264,15 @@ async def analyze_fluorescence(
             img = np.array(Image.open(io.BytesIO(data)).convert("RGB"))
 
     params = fluorescence_defaults()
-    params.update(sigma_pre=sigma_pre, dilate_iter=dilate_iter, erode_iter=erode_iter,
-                  area_filter_px=area_filter_px, pixel_size_um=pixel_size_um, return_images=return_images)
+    params.update(
+        sigma_pre=sigma_pre, dilate_iter=dilate_iter, erode_iter=erode_iter,
+        area_filter_px=area_filter_px, pixel_size_um=pixel_size_um, return_images=return_images,
+        cellpose_model_type=cellpose_model_type,
+        cellpose_pretrained_model=cellpose_pretrained_model,
+        cellpose_diameter=cellpose_diameter,
+        cellpose_flow_threshold=cellpose_flow_threshold,
+        cellpose_cellprob_threshold=cellpose_cellprob_threshold
+    )
 
     return await run_analysis(img, params, timings, "FL", profile, day, day0_area, organoid_number, "fluorescence", segmentation_method=segmentation_method)
 
@@ -260,6 +294,11 @@ async def analyze_unified(
     day: Optional[str] = Query(None),
     organoid_number: Optional[str] = Query(None),
     segmentation_method: str = Query("fiji"),
+    cellpose_model_type: str = Query("cpsam"),
+    cellpose_pretrained_model: Optional[str] = Query(None),
+    cellpose_diameter: Optional[float] = Query(None),
+    cellpose_flow_threshold: float = Query(0.4),
+    cellpose_cellprob_threshold: float = Query(0.0),
 ):
     if type == "brightfield":
         defaults = brightfield_defaults()
@@ -273,7 +312,12 @@ async def analyze_unified(
             edge_margin=edge_margin if edge_margin is not None else defaults["edge_margin"],
             pixel_size_um=pixel_size_um if pixel_size_um is not None else defaults["pixel_size_um"],
             return_images=return_images, profile=profile, day0_area=day0_area, day=day, organoid_number=organoid_number,
-            segmentation_method=segmentation_method
+            segmentation_method=segmentation_method,
+            cellpose_model_type=cellpose_model_type,
+            cellpose_pretrained_model=cellpose_pretrained_model,
+            cellpose_diameter=cellpose_diameter,
+            cellpose_flow_threshold=cellpose_flow_threshold,
+            cellpose_cellprob_threshold=cellpose_cellprob_threshold
         )
     else:
         defaults = fluorescence_defaults()
@@ -285,7 +329,12 @@ async def analyze_unified(
             area_filter_px=area_filter_px if area_filter_px is not None else defaults["area_filter_px"],
             pixel_size_um=pixel_size_um if pixel_size_um is not None else defaults["pixel_size_um"],
             return_images=return_images, profile=profile, day0_area=day0_area, day=day, organoid_number=organoid_number,
-            segmentation_method=segmentation_method
+            segmentation_method=segmentation_method,
+            cellpose_model_type=cellpose_model_type,
+            cellpose_pretrained_model=cellpose_pretrained_model,
+            cellpose_diameter=cellpose_diameter,
+            cellpose_flow_threshold=cellpose_flow_threshold,
+            cellpose_cellprob_threshold=cellpose_cellprob_threshold
         )
 
 # ----------------------------
