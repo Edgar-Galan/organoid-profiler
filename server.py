@@ -78,13 +78,8 @@ from fastapi.exception_handlers import http_exception_handler
 
 api.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://organoid-profiler.com",
-        "https://organoid-profiler.com",
-        "http://47.84.122.79",
-        "http://47.84.122.79:8000",
-    ],
-    allow_credentials=True,
+    allow_origins=["*"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -133,6 +128,9 @@ def fluorescence_defaults() -> Dict[str, Any]:
 # ----------------------------
 # API routes
 # ----------------------------
+
+UPLOAD_DIR = "temp_uploads"
+os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 async def run_analysis(img: np.ndarray, params: Dict[str, Any], timings: Dict[str, float], 
                        label: str, profile: bool, day: Optional[str], day0_area: Optional[float],
@@ -406,7 +404,7 @@ def get_run_results(run_id: str, include_images: bool = Query(False)):
 
 from fastapi import BackgroundTasks
 
-async def process_job(run_id: str, filename: str, file_data: bytes, analysis_type: str, pixel_size_um: float, 
+async def process_job(run_id: str, filename: str, file_path: str, analysis_type: str, pixel_size_um: float, 
                       day: Optional[str], organoid_number: Optional[str], day0_area: Optional[float],
                       advanced_params: dict = None, segmentation_method: str = "fiji", 
                       timings: dict = None, total_files: int = None):
@@ -430,7 +428,9 @@ async def process_job(run_id: str, filename: str, file_data: bytes, analysis_typ
                 day0_area = res.data[0]["area"]
                 logger.info(f"BASELINE FOUND: Using Day 0 area ({day0_area}) for organoid {org_num_str}")
 
-        img = np.array(Image.open(io.BytesIO(file_data)).convert("RGB"))
+        # Load from disk instead of memory
+        with timed(timings, "load_disk_s"):
+            img = np.array(Image.open(file_path).convert("RGB"))
         
         params = brightfield_defaults() if analysis_type == "brightfield" else fluorescence_defaults()
         params.update(pixel_size_um=pixel_size_um, return_images=True)
@@ -512,6 +512,14 @@ async def process_job(run_id: str, filename: str, file_data: bytes, analysis_typ
 
     except Exception as e:
         logger.error(f"Job failed: {filename} in run {run_id}: {e}")
+    finally:
+        # ALWAYS cleanup the temporary file
+        if os.path.exists(file_path):
+            try:
+                os.remove(file_path)
+                logger.debug(f"Deleted temp file: {file_path}")
+            except Exception as e:
+                logger.error(f"Failed to delete temp file {file_path}: {e}")
 
 @api.post("/runs/{run_id}/submit-jobs")
 async def submit_jobs(
@@ -570,14 +578,20 @@ async def submit_jobs(
 
     total_count = len(files)
     for file, m in job_items:
-        # Read file data before spawning background task to avoid "read of closed file" error
         timings = {}
-        with timed(timings, "upload_read_s"):
-            file_data = await file.read()
+        # Save file to disk instead of keeping data in RAM
+        temp_filename = f"{run_id}_{uuid4()}_{file.filename}"
+        file_path = os.path.join(UPLOAD_DIR, temp_filename)
+        
+        with timed(timings, "upload_save_s"):
+            with open(file_path, "wb") as buffer:
+                # Use chunks to avoid loading large files into RAM
+                while chunk := await file.read(1024 * 1024): # 1MB chunks
+                    buffer.write(chunk)
         
         background_tasks.add_task(
             process_job, 
-            run_id, file.filename, file_data, analysis_type, pixel_size_um,
+            run_id, file.filename, file_path, analysis_type, pixel_size_um,
             m.get("day"), m.get("organoid_number"), m.get("day0_area"),
             advanced_params,
             segmentation_method,
