@@ -5,15 +5,15 @@ import json
 import io
 import os
 import time
-import asyncio
+import asyncio, zipfile, httpx
 from typing import Tuple, Optional, Literal, Union, List, Dict, Any
 from uuid import uuid4
 
 import numpy as np
 from PIL import Image
-from fastapi import Body, FastAPI, File, Form, HTTPException, Query, UploadFile, Request, BackgroundTasks
+from fastapi import Body, FastAPI, File, Form, HTTPException, Query, UploadFile, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from loguru import logger
@@ -30,6 +30,9 @@ from orgprofiler.io.storage import StorageUploader
 from orgprofiler.io.database import get_supabase_client, format_analysis_result
 
 dotenv.load_dotenv()
+
+# Global queue for analysis jobs to prevent memory exhaustion
+analysis_queue = asyncio.Queue()
 
 # ----------------------------
 # Settings & Clients
@@ -398,11 +401,59 @@ def get_run_results(run_id: str, include_images: bool = Query(False)):
     res = query.execute()
     return {"run_id": run_id, "results": res.data}
 
+@api.get("/results/{result_id}/download-images")
+async def download_result_images(result_id: str):
+    """
+    Download ROI and Mask images for a specific result as a ZIP file.
+    """
+    logger.info(f"[DOWNLOAD-IMAGES] Fetching images for result {result_id}")
+    
+    # Get result info
+    res = supabase.table("analysis_results").select("filename, roi_image_path, mask_image_path").eq("id", result_id).execute()
+    if getattr(res, "error", None) or not res.data:
+        raise HTTPException(404, f"Result {result_id} not found")
+    
+    data = res.data[0]
+    filename = data.get("filename", "image")
+    roi_url = data.get("roi_image_path")
+    mask_url = data.get("mask_image_path")
+    
+    if not roi_url or not mask_url:
+        logger.warning(f"[DOWNLOAD-IMAGES] Historical result {result_id} missing storage paths (ROI: {bool(roi_url)}, Mask: {bool(mask_url)})")
+        raise HTTPException(404, "Images not found for this result. This may be an older result processed before image storage was enabled.")
+    
+    # Create ZIP in memory
+    zip_buffer = io.BytesIO()
+    
+    async with httpx.AsyncClient() as client:
+        # Download images
+        try:
+            roi_resp = await client.get(roi_url)
+            roi_resp.raise_for_status()
+            
+            mask_resp = await client.get(mask_url)
+            mask_resp.raise_for_status()
+        except Exception as e:
+            logger.error(f"[DOWNLOAD-IMAGES] Failed to download images from storage: {e}")
+            raise HTTPException(500, f"Failed to fetch images from storage: {str(e)}")
+        
+        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+            # Clean filename for the ZIP
+            base_name = os.path.splitext(filename)[0]
+            zip_file.writestr(f"{base_name}_roi.png", roi_resp.content)
+            zip_file.writestr(f"{base_name}_mask.png", mask_resp.content)
+    
+    zip_buffer.seek(0)
+    
+    return StreamingResponse(
+        zip_buffer,
+        media_type="application/x-zip-compressed",
+        headers={"Content-Disposition": f"attachment; filename={base_name}_images.zip"}
+    )
+
 # ----------------------------
 # Async Job Submission
 # ----------------------------
-
-from fastapi import BackgroundTasks
 
 async def process_job(run_id: str, filename: str, file_path: str, analysis_type: str, pixel_size_um: float, 
                       day: Optional[str], organoid_number: Optional[str], day0_area: Optional[float],
@@ -521,10 +572,49 @@ async def process_job(run_id: str, filename: str, file_path: str, analysis_type:
             except Exception as e:
                 logger.error(f"Failed to delete temp file {file_path}: {e}")
 
+# ----------------------------
+# Background Worker
+# ----------------------------
+
+async def analysis_worker():
+    """
+    Background worker that processes analysis jobs one by one from the queue.
+    This prevents memory exhaustion on low-RAM servers by ensuring sequential processing.
+    """
+    logger.info("ANALYSIS WORKER: Started and waiting for jobs...")
+    while True:
+        try:
+            # Wait for a job to be added to the queue
+            job_data = await analysis_queue.get()
+            filename = job_data.get("filename", "unknown")
+            run_id = job_data.get("run_id", "unknown")
+            
+            logger.info(f"ANALYSIS WORKER: Picking up job {filename} (Run: {run_id}) | Queue size: {analysis_queue.qsize()}")
+            
+            # Execute the job
+            # We call the existing process_job function
+            await process_job(**job_data)
+            
+            # Signal that the job is finished
+            analysis_queue.task_done()
+            logger.info(f"ANALYSIS WORKER: Finished job {filename} | Remaining in queue: {analysis_queue.qsize()}")
+            
+        except asyncio.CancelledError:
+            logger.info("ANALYSIS WORKER: Worker cancelled.")
+            break
+        except Exception as e:
+            logger.exception(f"ANALYSIS WORKER: Unexpected error in worker loop: {e}")
+            # Prevent rapid looping if there's a persistent error
+            await asyncio.sleep(5)
+
+@api.on_event("startup")
+async def startup_event():
+    # Start the background worker task
+    asyncio.create_task(analysis_worker())
+
 @api.post("/runs/{run_id}/submit-jobs")
 async def submit_jobs(
     run_id: str,
-    background_tasks: BackgroundTasks,
     request: Request,
     files: List[UploadFile] = File(...),
     analysis_type: str = Form(...),
@@ -591,15 +681,20 @@ async def submit_jobs(
                 while chunk := await file.read(1024 * 1024): # 1MB chunks
                     buffer.write(chunk)
         
-        background_tasks.add_task(
-            process_job, 
-            run_id, file.filename, file_path, analysis_type, pixel_size_um,
-            m.get("day"), m.get("organoid_number"), m.get("day0_area"),
-            advanced_params,
-            segmentation_method,
-            timings,
-            total_count
-        )
+        await analysis_queue.put({
+            "run_id": run_id,
+            "filename": file.filename,
+            "file_path": file_path,
+            "analysis_type": analysis_type,
+            "pixel_size_um": pixel_size_um,
+            "day": m.get("day"),
+            "organoid_number": m.get("organoid_number"),
+            "day0_area": m.get("day0_area"),
+            "advanced_params": advanced_params,
+            "segmentation_method": segmentation_method,
+            "timings": timings,
+            "total_files": total_count
+        })
     
     # Update total_files count if the column exists
     try:
