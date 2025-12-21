@@ -580,7 +580,9 @@ async def submit_jobs(
     for file, m in job_items:
         timings = {}
         # Save file to disk instead of keeping data in RAM
-        temp_filename = f"{run_id}_{uuid4()}_{file.filename}"
+        # Use os.path.basename to avoid issues with subdirectories in filename
+        safe_filename = os.path.basename(file.filename)
+        temp_filename = f"{run_id}_{uuid4()}_{safe_filename}"
         file_path = os.path.join(UPLOAD_DIR, temp_filename)
         
         with timed(timings, "upload_save_s"):
