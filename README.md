@@ -1,10 +1,12 @@
 # Organoid Profiler
-A tool for the automated, quantitative characterization of morphological features and fluorescence signals of organoid and spheroid cultures.
+Hello! Here you can find what we have built : a tool for the automated, quantitative characterization of morphological features and fluorescence signals of organoid and spheroid cultures.
 
-A web interface for this project is available at https://organoid-profiler.com/
+A web interface for this project is available at http://organoid-profiler.com/
+We also provider a [jupyter notebook](https://github.com/Edgar-Galan/organoid-profiler/blob/main/workflow.ipynb) to be able to easily run the pipeline and showcase what our tool can do.
 
 This code accompanies the manuscript entitled:
 "Automated, high-throughput and quantitative morphological characterization uncovers conserved longitudinal developmental kinetics in microfluidics-engineered organoids" by Galan et al. Under review at Nature Communications. 
+
 
 # **Welcome to Organoid Profiler**
 
@@ -48,7 +50,7 @@ pip install ipykernel numpy
 python -m ipykernel install --user --name=orgprofiler --display-name "Org Profiler"
 ```
 
-## **What is this tool?**
+# **In more details : what is this tool?**
 
 This is an automated software designed to analyze microscopy images of organoids. It replaces the need for manual tracing in ImageJ/Fiji. Instead of drawing circles by hand, you upload your images, and the software automatically identifies the organoid, measures it, and calculates growth or fluorescence intensity.
 
@@ -69,7 +71,7 @@ This is an automated software designed to analyze microscopy images of organoids
 
 ### **1. Choose Your Analysis Mode**
 
-The tool has two specific modes depending on your microscope settings.
+The tool has two specific modes depending on your microscope settings. You can select the mode in the analysis page of the website.
 
 - **Brightfield Mode (Morphology)**
     
@@ -90,14 +92,15 @@ The tool has two specific modes depending on your microscope settings.
 
 ### **2. Upload Your Images**
 
-- **Supported Files:** `.png`, `.jpg`, `.tif`, `.bmp`, `.gif`.
+- **Supported Files:** `.jpg`
     
 - **Best Practices:**
     
     - Ensure there is only **one organoid per image** for the most accurate results.
         
     - Ensure the organoid is **not touching the edge** of the image (the software automatically rejects edge-touching objects to prevent partial measurements).
-        
+
+You can upload a zip file containing the images relative to the daily evolution of the organoids using the following naming format : YYYY-mm-DD_d[AA]_[BB].jpg. **[AA]** represents the day that the image was taken and **[BB]** represents a reference number that you might want to use for your own convenience. You can find an example of dataset with the proper naming convention in the dataset folder. 
 
 ### **3. Interpret Your Results**
 
@@ -138,24 +141,25 @@ For every image, the tool saves a **ROI Overlay** image.
     
     - This occurs if the background is brighter than the object (e.g., high noise, no signal). It indicates no significant fluorescence was detected.
 
+For any other error, feel free to reach us at xx. 
+
 # Technical details
 
 **1. Overview**
 
-This system provides an automated pipeline for analyzing microscopy images of organoids. It is designed using a robust, Python-based FastAPI service. The system supports two distinct imaging modalities:
+This tool provides an automated pipeline for analyzing microscopy images of organoids. It is designed using a robust, Python-based FastAPI service. The system supports two distinct imaging modalities:
 
 - **Brightfield (BF):** For analyzing organoid morphology (size, shape, growth, etc).
     
 - **Fluorescence (FL):** For analyzing signal intensity and area.
-    
 
-The core output includes quantitative metrics (Area, Feret diameter, Circularity, Corrected Total Fluorescence) and visual validation images (ROI overlays).
+The output includes quantitative metrics (inlcuding Area, Feret diameter, Circularity, Corrected Total Fluorescence) and visual validation images (ROI overlays).
 
 ---
 
 ## **2. Image Processing Logic**
 
-The analysis logic is encapsulated in `main.py` within the `analyze_image` function. The process follows a linear pipeline of **Segmentation $\rightarrow$ Filtering $\rightarrow$ Measurement**.
+The analysis logic is encapsulated in `server.py` within the `analyze_image` function. The process follows a linear pipeline of **Segmentation $\rightarrow$ Filtering $\rightarrow$ Measurement**.
 
 ### **Step A: Pre-processing**
 
@@ -260,79 +264,4 @@ If `day` and `day0_area` are provided in the request:
 
 ## **3. API Reference**
 
-### **POST** `/analyze/brightfield`
-
-Optimized for dark objects on light backgrounds.
-
-**Key Parameters:**
-
-- `pixel_size_um`: (Float) Calibration scale (microns per pixel).
-    
-- `min_area_px`: (Int) Minimum size to detect (Default: 60,000).
-    
-- `min_circ`: (Float) Minimum circularity (Default: 0.28).
-    
-- `day0_area`: (Float, Optional) The area of this organoid on Day 0 (for growth calculation).
-    
-
-### **POST** `/analyze/fluorescence`
-
-Optimized for bright signal on dark backgrounds.
-
-**Key Parameters:**
-
-- `pixel_size_um`: (Float) Calibration scale.
-    
-- `sigma_pre`: (Float) Higher smoothing (Default: 14.0) to merge "spotty" fluorescence signal.
-    
-- `select_strategy`: Defaults to "composite_filtered" to measure total signal area.
-    
-
-**Returns (JSON):**
-
-JSON
-
-```
-{
-  "results": {
-    "area": 150000.5,
-    "circ": 0.85,
-    "mean": 45.2,
-    "corrTotalInt": 500200.0,
-    "feret": 450.2,
-    "growthRate": 1.25,
-    …
-  },
-  "roi_image": "data:image/png;base64,…",  // Overlay image
-  "mask_image": "data:image/png;base64,…"   // Binary mask
-}
-```
-
----
-
-## **4. Database Integration (Supabase)**
-
-The system includes endpoints to persist results to a Supabase database.
-
-1. **Create Run:** `POST /runs` - Creates a tracking ID for a batch of images.
-    
-2. **Persist Results:** `POST /runs/{run_id}/persist`
-    
-    - Uploads the generated ROI and Mask images to Supabase Storage.
-        
-    - Saves all calculated metrics (JSON output) into the `analysis_results` SQL table.
-        
-    - Links results to the specific `run_id`.
-        
-
-## **5. Configuration & Requirements**
-
-- **Environment Variables:**
-    
-    - `SUPABASE_URL`: URL of the Supabase instance.
-        
-    - `SUPABASE_KEY`: Service role or anon key.
-        
-- **Dependencies:** `fastapi`, `numpy`, `scikit-image`, `scipy`, `pillow`, `supabase`, `uvicorn`.
-    
-- **Optional:** `cellpose` (if deep-learning segmentation is enabled).
+The full API reference is available [here](http://organoid-profiler.com/docs).
