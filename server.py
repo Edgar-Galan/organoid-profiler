@@ -5,7 +5,7 @@ import json
 import io
 import os
 import time
-import asyncio, zipfile, httpx
+import asyncio, zipfile, httpx, anyio
 from typing import Tuple, Optional, Literal, Union, List, Dict, Any
 from uuid import uuid4
 
@@ -20,14 +20,14 @@ from loguru import logger
 import dotenv
 
 # Import from our new package
-from orgprofiler import (
+from organoid_profiler import (
     analyze_image,
     ResourceProfiler,
     timed,
     time_block
 )
-from orgprofiler.io.storage import StorageUploader
-from orgprofiler.io.database import get_supabase_client, format_analysis_result
+from organoid_profiler.io.storage import StorageUploader
+from organoid_profiler.io.database import get_supabase_client, format_analysis_result
 
 dotenv.load_dotenv()
 
@@ -104,6 +104,10 @@ def healthz_db():
 # Presets
 # ----------------------------
 
+def is_baseline_day(day: Any) -> bool:
+    """Check if a day string or value represents Day 0/Baseline."""
+    return str(day).lower() in ("0", "00", "0.0", "0.00", "d00", "d0", "d0.0")
+
 def brightfield_defaults() -> Dict[str, Any]:
     return dict(
         sigma_pre=6.4, dilate_iter=4, erode_iter=5, min_area_px=60_000,
@@ -150,18 +154,22 @@ async def run_analysis(img: np.ndarray, params: Dict[str, Any], timings: Dict[st
                        organoid_number: Optional[str], analysis_type: str, 
                        segmentation_method: str = "fiji") -> Dict[str, Any]:
     prof = None
+    logger.info(f"STARTING ANALYSIS: Type={analysis_type}, Method={segmentation_method}, Day={day}, Organoid={organoid_number}")
     try:
         with ResourceProfiler(f"analyze_{analysis_type}") as prof:
             with timed(timings, "analyze_total_s"):
                 # Ensure segmentation_method is not duplicated in params
                 params.pop("segmentation_method", None)
-                payload = analyze_image(img, segmentation_method=segmentation_method, **params)
+                # Run the heavy CPU-bound analysis in a thread to avoid blocking the event loop
+                from functools import partial
+                func = partial(analyze_image, img, segmentation_method=segmentation_method, **params)
+                payload = await anyio.to_thread.run_sync(func)
         
         with timed(timings, "postprocess_s"):
             area_value = float(payload["results"]["area"])
             
             # Robust Day 0 check
-            is_baseline = str(day) in ("0", "00", "0.0", "0.00", "d00", "d0", "d0.0")
+            is_baseline = is_baseline_day(day)
             
             if is_baseline:
                 growth_rate = 1.0
@@ -185,6 +193,8 @@ async def run_analysis(img: np.ndarray, params: Dict[str, Any], timings: Dict[st
             })
             if profile and prof:
                 payload["profile"] = prof.metrics
+        
+        logger.info(f"ANALYSIS SUCCESS: {label} | Area={payload['results'].get('area'):.2f} | Growth={growth_rate} | TotalTime={timings.get('analyze_total_s'):.3f}s")
         return payload
     except ValueError as e:
         logger.warning(f"Analysis validation error ({analysis_type}): {e}")
@@ -396,9 +406,22 @@ async def persist_run_results(run_id: str, items: List[PersistItem]):
 # ----------------------------
 
 @api.post("/runs")
-def create_run(name: str = Body(embed=True), user_id: Optional[str] = Body(default=None, embed=True)):
+def create_run(name: str = Body(embed=True), user_id: Optional[str] = Body(default=None, embed=True), total_files: Optional[int] = Body(default=None, embed=True)):
     run_id = str(uuid4())
     data = {"id": run_id, "name": name, "user_id": user_id, "status": "pending"}
+    if total_files is not None:
+        # We'll try to include total_files but be ready for it to fail if column doesn't exist
+        try:
+            temp_data = data.copy()
+            temp_data["total_files"] = total_files
+            supabase.table("analysis_runs").insert(temp_data).execute()
+            return {"run_id": run_id, "status": "pending"}
+        except Exception as e:
+            if "total_files" in str(e):
+                logger.warning("total_files column missing in analysis_runs table, falling back to base insert")
+            else:
+                raise e
+    
     supabase.table("analysis_runs").insert(data).execute()
     return {"run_id": run_id, "status": "pending"}
 
@@ -517,12 +540,13 @@ async def process_job(run_id: str, filename: str, file_path: str, analysis_type:
         
         logger.info(f"PROCESSING JOB: {filename} | Run: {run_id} | Organoid: {org_num_str} | Day: {day_str}")
 
-        is_day_0 = day_str in ("0", "00", "0.0", "0.00", "d00", "d0")
+        is_day_0 = is_baseline_day(day_str)
         
         is_baseline = is_day_0
 
         if day0_area is None and not is_day_0 and run_id and org_num_str:
-            res = supabase.table("analysis_results").select("area").eq("run_id", run_id).eq("day", "0").execute()
+            baseline_options = ["0", "00", "0.0", "0.00", "d00", "d0", "d0.0"]
+            res = supabase.table("analysis_results").select("area").eq("run_id", run_id).in_("day", baseline_options).eq("organoid_number", org_num_str).execute()
             logger.info(f"DAY 0 RES: {res.data}")
             if res.data:
                 day0_area = res.data[0]["area"]
@@ -530,7 +554,9 @@ async def process_job(run_id: str, filename: str, file_path: str, analysis_type:
 
         # Load from disk instead of memory
         with timed(timings, "load_disk_s"):
-            img = np.array(Image.open(file_path).convert("RGB"))
+            def load_img(path):
+                return np.array(Image.open(path).convert("RGB"))
+            img = await anyio.to_thread.run_sync(load_img, file_path)
         
         params = brightfield_defaults() if analysis_type == "brightfield" else fluorescence_defaults()
         params.update(pixel_size_um=pixel_size_um, return_images=True)
@@ -590,9 +616,15 @@ async def process_job(run_id: str, filename: str, file_path: str, analysis_type:
             # Try to get total from function argument or DB
             total = total_files
             if total is None:
-                run_res = supabase.table("analysis_runs").select("total_files").eq("id", run_id).single().execute()
-                if run_res.data:
-                    total = run_res.data.get("total_files")
+                try:
+                    run_res = supabase.table("analysis_runs").select("total_files").eq("id", run_id).single().execute()
+                    if run_res.data:
+                        total = run_res.data.get("total_files")
+                except Exception as e:
+                    if "total_files" in str(e):
+                        logger.debug("total_files column missing, skipping completion check via DB lookup")
+                    else:
+                        logger.error(f"Error fetching total_files: {e}")
             
             if total:
                 count_res = supabase.table("analysis_results").select("id", count="exact").eq("run_id", run_id).execute()
@@ -669,14 +701,15 @@ async def submit_jobs(
     analysis_type: str = Form(...),
     pixel_size_um: float = Form(...),
     segmentation_method: str = Form("fiji"),
-    metadata: Optional[str] = Form(None)
+    metadata: Optional[str] = Form(None),
+    total_files: Optional[int] = Form(None)
 ):
     meta_list = json.loads(metadata) if metadata else []
     
     # Collect all other form fields as advanced parameters
     form_data = await request.form()
     advanced_params = {}
-    known_fields = {"files", "analysis_type", "pixel_size_um", "metadata", "return_images", "segmentation_method"}
+    known_fields = {"files", "analysis_type", "pixel_size_um", "metadata", "return_images", "segmentation_method", "total_files"}
     
     # Define valid parameter names for filtering
     valid_params = set(brightfield_defaults().keys()) | set(fluorescence_defaults().keys())
@@ -708,49 +741,69 @@ async def submit_jobs(
         job_items.append((file, m))
     
     def get_day_val(item):
+        day = item[1].get("day")
+        if is_baseline_day(day):
+            return 0
         try:
-            return int(item[1].get("day", 0))
+            import re
+            nums = re.findall(r'\d+', str(day))
+            if nums:
+                return int(nums[0])
+            return int(float(day))
         except (ValueError, TypeError):
             return 999 # Put unknown days at the end
 
     job_items.sort(key=get_day_val)
 
     total_count = len(files)
-    for file, m in job_items:
+    
+    async def save_and_enqueue(file_obj, metadata):
         timings = {}
         # Save file to disk instead of keeping data in RAM
-        # Use os.path.basename to avoid issues with subdirectories in filename
-        safe_filename = os.path.basename(file.filename)
+        safe_filename = os.path.basename(file_obj.filename)
         temp_filename = f"{run_id}_{uuid4()}_{safe_filename}"
         file_path = os.path.join(UPLOAD_DIR, temp_filename)
         
-        with timed(timings, "upload_save_s"):
-            with open(file_path, "wb") as buffer:
-                # Use chunks to avoid loading large files into RAM
-                while chunk := await file.read(1024 * 1024): # 1MB chunks
-                    buffer.write(chunk)
-        
-        await analysis_queue.put({
-            "run_id": run_id,
-            "filename": file.filename,
-            "file_path": file_path,
-            "analysis_type": analysis_type,
-            "pixel_size_um": pixel_size_um,
-            "day": m.get("day"),
-            "organoid_number": m.get("organoid_number"),
-            "day0_area": m.get("day0_area"),
-            "advanced_params": advanced_params,
-            "segmentation_method": segmentation_method,
-            "timings": timings,
-            "total_files": total_count
-        })
+        try:
+            with timed(timings, "upload_save_s"):
+                async with await anyio.open_file(file_path, "wb") as buffer:
+                    # Use chunks to avoid loading large files into RAM
+                    while chunk := await file_obj.read(1024 * 1024): # 1MB chunks
+                        await buffer.write(chunk)
+            
+            await analysis_queue.put({
+                "run_id": run_id,
+                "filename": file_obj.filename,
+                "file_path": file_path,
+                "analysis_type": analysis_type,
+                "pixel_size_um": pixel_size_um,
+                "day": metadata.get("day"),
+                "organoid_number": metadata.get("organoid_number"),
+                "day0_area": metadata.get("day0_area"),
+                "advanced_params": advanced_params,
+                "segmentation_method": segmentation_method,
+                "timings": timings,
+                "total_files": total_files or total_count
+            })
+        except Exception as e:
+            logger.error(f"Failed to save/enqueue file {file_obj.filename}: {e}")
+            # Clean up if partially saved
+            if os.path.exists(file_path):
+                try:
+                    os.remove(file_path)
+                except Exception:
+                    pass
+
+    # Process all file saves in parallel
+    await asyncio.gather(*[save_and_enqueue(file, m) for file, m in job_items])
     
     # Update total_files count if the column exists
     try:
-        supabase.table("analysis_runs").update({
-            "status": "running", 
-            "total_files": len(files)
-        }).eq("id", run_id).execute()
+        update_data = {"status": "running"}
+        if total_files:
+            update_data["total_files"] = total_files
+            
+        supabase.table("analysis_runs").update(update_data).eq("id", run_id).execute()
     except Exception:
         # Fallback if total_files doesn't exist
         supabase.table("analysis_runs").update({"status": "running"}).eq("id", run_id).execute()

@@ -2,13 +2,10 @@ import numpy as np
 from typing import Optional, Union, Tuple
 from scipy import ndimage as ndi
 from skimage import filters, morphology, segmentation
-try:
-    from skimage.morphology import footprint_rectangle as rectangle
-except ImportError:
-    from skimage.morphology import rectangle
 from skimage.morphology import disk
 from skimage.segmentation import clear_border
 from pathlib import Path
+import time
 from loguru import logger
 
 from .imaging import convert_rgb_to_grayscale_uint8
@@ -37,13 +34,15 @@ def build_segmentation_mask_fiji_style(
     object_is_dark: bool = True,
 ) -> np.ndarray:
     """Build binary mask using a Fiji/ImageJ-inspired pipeline."""
+    logger.debug(f"FIJI-STYLE: sigma={gaussian_sigma}, dil={dilation_iterations}, ero={erosion_iterations}, dark={object_is_dark}")
     grayscale = convert_rgb_to_grayscale_uint8(image_rgb)
     initial_threshold = filters.threshold_isodata(grayscale)
     
     binary_mask = (grayscale <= initial_threshold) if object_is_dark else (grayscale >= initial_threshold)
     binary_mask = ndi.binary_fill_holes(binary_mask)
 
-    structuring_element = rectangle(DEFAULT_STRUCTURING_ELEMENT_SIZE)
+    # Use a direct numpy array for the structuring element to avoid scikit-image version issues
+    structuring_element = np.ones(DEFAULT_STRUCTURING_ELEMENT_SIZE, dtype=np.uint8)
 
     for _ in range(int(dilation_iterations)):
         binary_mask = morphology.binary_dilation(binary_mask, footprint=structuring_element)
@@ -102,6 +101,10 @@ def build_segmentation_mask_cpsam(
     # Ensure diameter is not 0 to avoid ZeroDivisionError
     eval_diameter = diameter if diameter and diameter > 0 else None
     
+    use_gpu = core.use_gpu()
+    logger.info(f"CELLPOSE EVAL START: Image={grayscale.shape}, GPU={use_gpu}, diam={eval_diameter}, flow_thresh={flow_threshold}, prob_thresh={cellprob_threshold}")
+    
+    _t0 = time.time()
     result = model.eval(
         grayscale.astype(np.uint8, copy=False),
         diameter=eval_diameter,
@@ -110,6 +113,8 @@ def build_segmentation_mask_cpsam(
         min_size=min_size,
         channels=[0, 0],
     )
+    _dt = time.time() - _t0
+    logger.info(f"CELLPOSE EVAL FINISHED: Time={_dt:.3f}s")
     
     masks = result[0] if isinstance(result, tuple) else result
     flows = result[1] if isinstance(result, tuple) else None

@@ -52,6 +52,7 @@ def analyze_image(
         H, W, _ = img.shape
 
     flow_image_base64 = ""
+    logger.info(f"Starting segmentation using {segmentation_method}...")
     with time_block("segmentation"):
         if segmentation_method == "cpsam":
             res = build_segmentation_mask_cpsam(
@@ -77,9 +78,11 @@ def analyze_image(
                 erosion_iterations=erode_iter,
                 object_is_dark=object_is_dark,
             )
-
+    
     labels = measure.label(mask_bool, connectivity=2)
-    if labels.max() == 0:
+    num_labels = labels.max()
+    logger.info(f"Segmentation found {num_labels} potential particles.")
+    if num_labels == 0:
         raise ValueError("No organoids found in the image")
 
     xmin, xmax = W * edge_margin, W * (1.0 - edge_margin)
@@ -109,8 +112,12 @@ def analyze_image(
         keep_mask = keep2
 
     if not keep_mask.any():
+        logger.warning("No particles passed filters, falling back to largest available particle.")
         largest = max(measure.regionprops(labels), key=lambda rr: rr.area)
         keep_mask = (labels == largest.label)
+    else:
+        num_kept = measure.label(keep_mask, connectivity=2).max()
+        logger.info(f"Filtering complete. Kept {num_kept} particles passing size/circ filters.")
 
     if select_strategy == "largest":
         union_lab = measure.label(keep_mask, connectivity=2)
@@ -136,6 +143,7 @@ def analyze_image(
 
     area_px = float(mask_measured.sum())
     perim_px = float(perimeter_crofton(mask_measured, directions=4))
+    logger.info(f"Calculating features for selected object (Area: {area_px:.1f} px)...")
 
     contours = measure.find_contours(mask_measured, 0.5)
     if contours:
