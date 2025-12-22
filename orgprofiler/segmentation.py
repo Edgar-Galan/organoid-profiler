@@ -85,15 +85,19 @@ def build_segmentation_mask_cpsam(
         raise RuntimeError("cellpose is not installed")
 
     grayscale = convert_rgb_to_grayscale_uint8(image_rgb)
-    
+    logger.info("Trying with pre-trained model")
     # In Cellpose 4, we use Cellpose for built-in models and CellposeModel for custom ones
+    # However, 'cpsam' is only supported in CellposeModel, not in the high-level Cellpose wrapper
     if pretrained_model:
         model = models.CellposeModel(pretrained_model=resolve_model_path(pretrained_model), gpu=core.use_gpu())
-        logger.info(f"Evaluating organoid cpsam...")
+        logger.info(f"Evaluating with custom model: {pretrained_model}")
+    elif model_type == "cpsam":
+        model = models.CellposeModel(model_type="cpsam", gpu=core.use_gpu())
+        logger.info(f"Evaluating with built-in cpsam")
     else:
-        # Use Cellpose class for built-in models to avoid v4 warnings
+        # Use high-level wrapper for other standard models
         model = models.Cellpose(model_type=model_type, gpu=core.use_gpu())
-        logger.info(f"Evaluating cpsam")
+        logger.info(f"Evaluating with standard model: {model_type}")
     # Cellpose 4 eval signature is mostly backward compatible, but supports cpsam
     # Ensure diameter is not 0 to avoid ZeroDivisionError
     eval_diameter = diameter if diameter and diameter > 0 else None
