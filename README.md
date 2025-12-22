@@ -35,7 +35,7 @@ conda install -c conda-forge numpy scipy scikit-image matplotlib pillow -y
 
 ```bash
 # install the remaining dependencies with pip
-pip install cellpose==2.0.2 torch fastapi uvicorn pydantic-settings supabase loguru python-dotenv httpx python-multipart
+pip install cellpose==2.0.2 torch fastapi uvicorn pydantic-settings supabase loguru python-dotenv httpx python-multipart anyio
 ```
 
 ### (Optional) Jupyter Notebook Setup
