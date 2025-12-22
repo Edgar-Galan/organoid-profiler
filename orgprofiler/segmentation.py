@@ -86,17 +86,21 @@ def build_segmentation_mask_cpsam(
 
     grayscale = convert_rgb_to_grayscale_uint8(image_rgb)
     
-    # In Cellpose 4, we use CellposeModel for both built-in and custom models
+    # In Cellpose 4, we use Cellpose for built-in models and CellposeModel for custom ones
     if pretrained_model:
         model = models.CellposeModel(pretrained_model=resolve_model_path(pretrained_model), gpu=core.use_gpu())
         logger.info(f"Evaluating organoid cpsam...")
     else:
-        model = models.CellposeModel(model_type=model_type, gpu=core.use_gpu())
+        # Use Cellpose class for built-in models to avoid v4 warnings
+        model = models.Cellpose(model_type=model_type, gpu=core.use_gpu())
         logger.info(f"Evaluating cpsam")
     # Cellpose 4 eval signature is mostly backward compatible, but supports cpsam
+    # Ensure diameter is not 0 to avoid ZeroDivisionError
+    eval_diameter = diameter if diameter and diameter > 0 else None
+    
     result = model.eval(
         grayscale.astype(np.uint8, copy=False),
-        diameter=diameter,
+        diameter=eval_diameter,
         flow_threshold=flow_threshold,
         cellprob_threshold=cellprob_threshold,
         min_size=min_size,
