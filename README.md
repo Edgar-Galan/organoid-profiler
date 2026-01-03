@@ -1,267 +1,172 @@
-# THe organoid profiler
-Hello! Here you can find what we have built : a tool for the automated, quantitative characterization of morphological features and fluorescence signals of organoid and spheroid cultures.
+# Organoid Profiler
 
-A web interface for this project is available at http://organoid-profiler.com/
-We also provider a [jupyter notebook](https://github.com/Edgar-Galan/organoid-profiler/blob/main/workflow.ipynb) to be able to easily run the pipeline and showcase what our tool can do.
+A tool for automated, quantitative characterization of morphological features and fluorescence signals in organoid and spheroid cultures.
 
-This code accompanies the manuscript entitled:
-"Automated, high-throughput and quantitative morphological characterization uncovers conserved longitudinal developmental kinetics in microfluidics-engineered organoids" by Galan et al. Under review at Nature Communications. 
+- **Web Interface:** [organoid-profiler.com](https://www.organoid-profiler.com/)
+    
+- **Demo:** [Jupyter Notebook Workflow](https://github.com/Edgar-Galan/organoid-profiler/blob/main/workflow.ipynb)
+    
 
+> Citation:
+> 
+> This code accompanies the manuscript: "Automated, high-throughput and quantitative morphological characterization uncovers conserved longitudinal developmental kinetics in microfluidics-engineered organoids" by Galan et al. (Under review at Nature Communications).
+> 
+> Full-text preprint available at BioRxiv: [10.64898/2026.01.01.694533v1](https://www.biorxiv.org/content/10.64898/2026.01.01.694533v1).
 
-# **Welcome!**
+---
 
-## **Installation instructions**
+## Overview
 
-These are the installation instructions to be able to run the code and the jupyter notebook. In this repo, we have included the code on the server that is available with a easy-to-use user interface on this [website](https://organoid-profiler.com/). 
+Organoid Profiler is an automated software designed to streamline the analysis of microscopy images. It eliminates the need for manual segmentation and metric extraction. By simply uploading your images, Organoid Profiler identifies organoids and extracts 25 comprehensive morphological metrics. This allows researchers to quantitatively discover patterns in data—such as growth rates and phenotypic changes—that are not evident via qualitative visual inspection.
 
-### Create the Conda Environment
+### Core Workflow
 
-```bash
-# create the environment
+1. **Find the Organoid:** Automatically detects organoids in images and generates segmentation masks.
+    
+2. **Filter Debris:** Applies user-defined criteria (e.g., size or circularity constraints) to ignore dust, shadows, and small cell clumps, preventing data skew.
+    
+3. **Calculate Metrics:** Computes 25 morphological metrics related to size, shape, pixel intensity, and distribution.
+    
+4. **Validate Results:** Generates mask overlays on original images, allowing for visual validation of the segmentation accuracy.
+    
+
+---
+
+## Installation
+
+You can run the code locally or via the provided [Jupyter Notebook](https://github.com/Edgar-Galan/organoid-profiler/blob/main/workflow.ipynb).
+
+### 1. Create a Conda Environment
+
+Bash
+
+```
+# Create the environment
 conda create -n organoidprofiler python=3.11 -y
 
-# activate the environment
+# Activate the environment
 conda activate organoidprofiler
 ```
 
-### Use Conda to Install Scientific Packages
+### 2. Install Scientific Packages
 
-```bash
-# install scientific packages with conda
+Bash
+
+```
+# Install scientific packages with conda
 conda install -c conda-forge numpy scipy scikit-image matplotlib pillow -y
 ```
 
-### Install All Other Packages Using pip
+### 3. Install Dependencies via Pip
 
-```bash
-# install the remaining dependencies with pip
+Bash
+
+```
+# Install the remaining dependencies
 pip install cellpose==2.0.2 torch fastapi uvicorn pydantic-settings supabase loguru python-dotenv httpx python-multipart anyio
 ```
 
-### (Optional) Jupyter Notebook Setup
+### 4. (Optional) Jupyter Notebook Setup
 
-If you are planning on running the Jupyter notebook, run the following commands:
+If you plan to run the workflow via the notebook:
 
-```bash
-# install the kernel
+Bash
+
+```
+# Install the kernel
 pip install ipykernel numpy
 
-# register the kernel; you can then select "organoidprofiler" environment to run the Jupyter notebook
+# Register the kernel
 python -m ipykernel install --user --name=organoidprofiler --display-name "Org Profiler"
 ```
 
-# **In more details : what is this tool?**
-
-This is an automated software designed to analyze microscopy images of organoids. It replaces the need for manual tracing in ImageJ/Fiji. Instead of drawing circles by hand, you upload your images, and the software automatically identifies the organoid, measures it, and calculates growth or fluorescence intensity.
-
-## **What does it do?**
-
-1. **Finds the Organoid:** Automatically detects the organoid in your image and draws an outline (Region of Interest or ROI) around it.
-    
-2. **Ignores Debris:** Filters out dust, shadows, and small cell clumps so they don't skew your data.
-    
-3. **Calculates Metrics:** Instantly computes Area, Diameter, Circularity, and Signal Intensity.
-    
-4. **Validates Data:** Generates a "check image" with a magenta outline so you can visually confirm the software measured the right thing.
-    
-
 ---
 
-## **How to Use It**
+## Usage Guide
 
-### **1. Choose Your Analysis Mode**
+### 1. Choose Analysis Mode
 
-The tool has two specific modes depending on your microscope settings. You can select the mode in the analysis page of the website.
+The tool offers two segmentation and analysis modes tailored to different datasets:
 
-- **Brightfield Mode (Morphology)**
+|**Mode**|**Target Images**|**Primary Use Cases**|**Key Features**|
+|---|---|---|---|
+|**Brightfield (Morphology)**|Standard light microscopy|Measuring size, shape, swelling, and disintegration (death).|Tracks individual organoids across time-points to calculate specific growth rates.|
+|**Fluorescence (Intensity)**|Immunofluorescence, Live/Dead staining|Gene expression, protein levels, cell viability.|Ignores saturated pixels; performs automated background subtraction for standardized Corrected Total Fluorescence (CTF).|
+
+### 2. Prepare and Upload Images
+
+- **Supported Formats:** `.jpg`, `.png`, `.tif`, `.tiff` (Multichannel support, e.g., `.nd2`, coming soon).
     
-    - **What it's for:** Standard light microscopy where organoids appear **dark** against a **bright** background.
-        
-    - **Use this to measure:** Size, growth, swelling, or death (disintegration).
-        
-    - **Key Feature:** If you provide the starting area (Day 0 area), it calculates a **Growth Rate** (e.g., 1.2x growth) automatically.
-        
-- **Fluorescence Mode (Intensity)**
+- File Naming Convention:
     
-    - **What it's for:** Fluorescent images (GFP, RFP, DAPI, etc.) where organoids appear **bright** against a **dark** background.
-        
-    - **Use this to measure:** Gene expression, protein levels, or cell viability.
-        
-    - **Key Feature:** It automatically subtracts background noise to provide **Corrected Total Fluorescence (CTF)**, the standard metric for accurate brightness comparison.
-        
-
-### **2. Upload Your Images**
-
-- **Supported Files:** `.jpg`
+    To enable time-point tracking, organize your folders or name your files as follows:
     
-- **Best Practices:**
-    
-    - Ensure there is only **one organoid per image** for the most accurate results.
+    - **Option A (Filename):** `experiment-name_d[dd]_org[oo].jpg` or `experiment-name_d[dd]_[oo].jpg`
         
-    - Ensure the organoid is **not touching the edge** of the image (the software automatically rejects edge-touching objects to prevent partial measurements).
-
-You can upload a zip file containing the images relative to the daily evolution of the organoids using the following naming format : YYYY-mm-DD_d[AA]_[BB].jpg. **[AA]** represents the day that the image was taken and **[BB]** represents a reference number that you might want to use for your own convenience. You can find an example of dataset with the proper naming convention in the dataset folder. 
-
-### **3. Interpret Your Results**
-
-The tool outputs a data table. Here is how to read the most important columns:
-
-|**Metric**|**What it tells you**|
-|---|---|
-|**Area**|The total surface area of the organoid (in $\mu m^2$).|
-|**Growth Rate**|How much the organoid grew relative to Day 0. (e.g., `1.5` means it is 50% larger).|
-|**Circularity**|A shape score from 0.0 to 1.0. A perfect circle is `1.0`. Lower values (e.g., `0.5`) indicate an irregular, budded, or disintegrating shape.|
-|**Feret Diameter**|The "caliper" width. Imagine measuring the organoid at its widest point with a ruler. Useful for oblong shapes.|
-|**Corrected Total Fluorescence**|The total brightness of the organoid with background noise removed. Use this to compare signal strength between samples.|
-
-### **4. Quality Control (Visual Check)**
-
-For every image, the tool saves a **ROI Overlay** image.
-
-- **Look for:** A **magenta line** outlining your organoid.
-    
-- **Action:** Open these images to verify accuracy.
-    
-    - If the line hugs the organoid perfectly $\rightarrow$ **Keep the data.**
+        - `[dd]`: Day of experiment.
+            
+        - `[oo]`: (Optional) Organoid identifier number for individual longitudinal tracking.
+            
+    - **Option B (Folder Structure):** `experiment-name/d[dd]/image.jpg` or `experiment-name/Day[dd]/image.jpg`
         
-    - If the line circles debris or misses part of the organoid $\rightarrow$ **Discard that data point.**
+    
+    > _Note: Example datasets with this naming convention can be found in the [dataset](https://github.com/Edgar-Galan/organoid-profiler/tree/main/dataset) folder of this repository._
+    
+
+### 3. Interpret Results
+
+The tool outputs a data table in **`.csv`** format containing the 25 extracted metrics.
+
+- **Coming Soon:** Automated plotting (line plots, strip plots, clustermaps, variance heatmaps) and AI-integrated reporting to generate scientific descriptions of data patterns.
+    
+
+### 4. Quality Control (Visual Check)
+
+For every processed image, the tool saves a **ROI Overlay** image.
+
+- **Check for:** A **magenta line** outlining the organoid.
+    
+- **Action:**
+    
+    - Line follows contour $\rightarrow$ **Valid Data.**
+        
+    - Poor segmentation $\rightarrow$ Adjust parameters (Area/Circularity thresholds for standard mode; Flow/Probability thresholds for deep learning mode).
         
 
 ---
 
-## **Troubleshooting**
+## Metrics Dictionary
 
-- **My organoid wasn't measured (Result is "NA").**
-    
-    - Is it touching the edge of the image? (The tool ignores these).
-        
-    - Is it extremely small? (It might be below the minimum size filter).
-        
-- **My fluorescence value is negative.**
-    
-    - This occurs if the background is brighter than the object (e.g., high noise, no signal). It indicates no significant fluorescence was detected.
+The following 25 metrics are calculated for every identified object:
 
-For any other error, feel free to reach us at xx. 
-
-# Technical details
-
-**1. Overview**
-
-This tool provides an automated pipeline for analyzing microscopy images of organoids. It is designed using a robust, Python-based FastAPI service. The system supports two distinct imaging modalities:
-
-- **Brightfield (BF):** For analyzing organoid morphology (size, shape, growth, etc).
-    
-- **Fluorescence (FL):** For analyzing signal intensity and area.
-
-The output includes quantitative metrics (inlcuding Area, Feret diameter, Circularity, Corrected Total Fluorescence) and visual validation images (ROI overlays).
-
----
-
-## **2. Image Processing Logic**
-
-The analysis logic is encapsulated in `server.py` within the `analyze_image` function. The process follows a linear pipeline of **Segmentation $\rightarrow$ Filtering $\rightarrow$ Measurement**.
-
-### **Step A: Pre-processing**
-
-1. **Input:** Accepts an image file (PNG, JPG, TIF).
-    
-2. **Conversion:** Decodes the image into a NumPy array (RGB).
-    
-3. **Cropping (Optional):** Removes a configurable border (`crop_border_px`) from the image edges to eliminate camera artifacts or frame lines often found in microscope exports.
-    
-
-### **Step B: Segmentation (Mask Generation)**
-
-The system generates a binary mask (Foreground vs. Background) using a "Fiji-style" morphological approach.
-
-1. **Grayscale Conversion:** The RGB image is converted to 8-bit grayscale using standard luminance weights ($0.299R + 0.587G + 0.114B$).
-    
-2. **Initial Thresholding (Isodata):**
-    
-    - **BF Mode:** Assumes **dark** objects. Pixels $\le$ Threshold are foreground.
-        
-    - **FL Mode:** Assumes **bright** objects. Pixels $\ge$ Threshold are foreground.
-        
-3. **Morphological Cleaning:**
-    
-    - **Hole Filling:** Fills internal holes in the detected objects.
-        
-    - **Dilation:** Expands the mask by `dilate_iter` pixels. This connects fragmented parts of an organoid.
-        
-    - **Erosion:** Shrinks the mask by `erode_iter` pixels. This restores the object to its approximate original size while smoothing rough edges.
-        
-4. **Gaussian Smoothing:** A Gaussian blur (`sigma_pre`) is applied to the binary mask itself to create smooth, organic contours rather than jagged pixelated edges.
-    
-5. **Secondary Thresholding:** The smoothed mask is thresholded again to finalize the binary ROI (Region of Interest).
-    
-
-### **Step C: Object Filtering & Selection**
-
-The system identifies connected components (contours) in the mask and filters them to find the true organoid.
-
-1. **Area Filter:** Rejects objects smaller than `min_area_px` or larger than `max_area_px`.
-    
-2. **Circularity Filter:** Rejects objects with circularity below `min_circ` (useful for ignoring debris in Brightfield).
-    
-3. **Edge Exclusion:** (Optional) Rejects objects touching or near the image border (`edge_margin`).
-    
-4. **Selection Strategy:**
-    
-    - **BF Strategy (`"largest"`):** Selects the single largest valid object.
-        
-    - **FL Strategy (`"composite_filtered"`):** Combines _all_ valid objects into one composite ROI. This captures organoids that may appear as disjointed bright spots.
-        
-
-### **Step D: Measurements**
-
-Once the ROI is finalized, metrics are calculated.
-
-#### **1. Morphological Metrics**
-
-- **Area:** Total area in $\mu m^2$ (converted using `pixel_size_um`).
-    
-- **Perimeter:** Length of the contour.
-    
-- **Circularity:** $4\pi \times (Area / Perimeter^2)$. A value of 1.0 is a perfect circle.
-    
-- **Feret Diameter:** The "caliper" dimensions (Maximum and Minimum caliper width) calculated from the convex hull of the ROI.
-    
-- **Fitted Ellipse:** Major axis, Minor axis, and Aspect Ratio.
-    
-
-#### **2. Intensity Metrics**
-
-- **Inversion (BF Only):** Brightfield images are inverted ($255 - pixel\_value$) so that dark organoids yield high "intensity" values, allowing for density calculations.
-    
-- **Raw Metrics:** Mean, Median, Mode, Min, Max, Standard Deviation, and Integrated Density (Sum of all pixels).
-    
-- **Skewness & Kurtosis:** Statistical descriptors of the intensity distribution.
-    
-
-#### **3. Background Correction**
-
-To calculate accurate fluorescence or density, background noise is subtracted.
-
-- **Ring Method (BF Default):** Measures the median intensity of a ring surrounding the organoid (width `ring_px`).
-    
-- **Inverse Composite (FL Default):** Measures the median intensity of _all_ pixels outside the detected objects.
-    
-
-Key Formula: Corrected Total Fluorescence (CTF)
-
-$$CTF = IntegratedDensity - (Area_{ROI} \times Mean_{Background})$$
-
-### **Step E: Growth Rate**
-
-If `day` and `day0_area` are provided in the request:
-
-- **Day 0:** Growth Rate = 1.0
-    
-- **Day N:** Growth Rate = $Area_{DayN} / Area_{Day0}$
-    
+|**Feature**|**Description**|**Equation**|**Notes**|
+|---|---|---|---|
+|**Area**|Projected area of the object (ROI).|$A$|Calibrated in $\mu m^2$ based on `pixel_size`.|
+|**Growth Rate**|Relative change in area normalized to $t_0$.|$G_r = \frac{A_d}{\bar{A}_{t0}}$|$A_d$: current area; $\bar{A}_{t0}$: mean area on day 0.|
+|**Perimeter**|Length of the outside boundary.|$P$|Calculated from boundary pixel centers.|
+|**Feret Max**|Longest distance between any two points on boundary.|$F_{max}$|Max caliper diameter.|
+|**Feret Min**|Min distance between parallel tangents.|$F_{min}$|Min caliper diameter.|
+|**Major Axis**|Primary axis of best-fitting ellipse.|$Major$||
+|**Minor Axis**|Secondary axis of best-fitting ellipse.|$Minor$||
+|**Aspect Ratio**|Ratio of major to minor axis.|$AR = \frac{Major}{Minor}$|1.0 = Circle; >1.0 = Elongated.|
+|**Equiv. Diameter**|Diameter of a circle with same area.|$ECD = 2 \sqrt{\frac{A}{2\pi}}$||
+|**Circularity**|Resemblance to a perfect circle.|$C = 4\pi \times \frac{A}{P^2}$|1.0 = Perfect circle; $\to$ 0.0 = Elongated polygon.|
+|**Roundness**|Inverse AR derived from area.|$R = 4 \times \frac{A}{\pi \times Major^2}$|Insensitive to irregular borders (smoothness).|
+|**Solidity**|Density relative to convex hull.|$S = \frac{A}{A_{convex}}$|Measures convexity.|
+|**Mean Intensity**|Average pixel intensity.|$\bar{I} = \frac{\sum I_{xy}}{N}$|$N$ = number of pixels.|
+|**Int. Density**|Sum of pixel intensities.|$IntDen = \bar{I} \times A$||
+|**Corr. Total Fluor.**|Total fluorescence corrected for background.|$CTF = IntDen - (A \times \bar{I}_{bg})$|$\bar{I}_{bg}$ = Background mean intensity.|
+|**Corr. Mean Fluor.**|Mean intensity corrected for background.|$CMF = \frac{CTF}{A}$|Average signal density per unit area.|
+|**Skewness**|Asymmetry of intensity distribution.|$Skew = \frac{1}{N} \sum (\frac{x_i - \bar{x}}{\sigma})^3$||
+|**Kurtosis**|"Tailedness" of intensity distribution.|$Kurt = [\dots]^4 - 3$|Flatness of pixel value distribution.|
+|**Centroid Dist.**|Geometric vs. Intensity-weighted center shift.|$d = \sqrt{(x - x_m)^2 + (y - y_m)^2}$|Indicates uneven density.|
+|**Eccentricity**|Deviation of fitted ellipse from circle.|$e = \sqrt{1 - \frac{Minor^2}{Major^2}}$|0 = Circular; $\to$ 1 = Elliptical.|
+|**Criteria**|Boolean validation of object.|$Valid = (A > S_{min}) \land (C > C_{thresh})$|Used to filter artifacts.|
 
 ---
 
-## **3. API Reference**
+## Contact & Support
 
-The full API reference is available [here](http://organoid-profiler.com/docs).
+If you encounter issues or the tool does not fulfill your experimental needs, please contact us. We appreciate your feedback.
+
+**Email:** [edgar.galan@tsinghua.org.cn](mailto:edgar.galan@tsinghua.org.cn)
