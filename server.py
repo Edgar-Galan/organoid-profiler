@@ -115,14 +115,19 @@ def is_baseline_day(day: Any) -> bool:
 
 def brightfield_defaults() -> Dict[str, Any]:
     return dict(
-        sigma_pre=6.4, dilate_iter=4, erode_iter=5, min_area_px=60_000,
-        max_area_px=20_000_000, min_circ=0.28, edge_margin=0.20,
-        pixel_size_um=0.86, overlay_width=11, return_images=True,
+        sigma_pre=6, dilate_iter=3, erode_iter=3, min_area_px=50_000,
+        max_area_px=750_000, min_circ=0.38, edge_margin=0.10,
+        pixel_size_um=1, overlay_width=10, return_images=True,
         crop_overlay=False, crop_border_px=2, ring_px=20,
         invert_for_intensity=True, exclude_edge_particles=True,
-        select_strategy="largest", area_filter_px=None,
+        select_strategy="all", area_filter_px=None,
         background_mode="ring", object_is_dark=True,
         ignore_zero_bins_for_mode_min=False,
+        # Watershed defaults for FIJI-style segmentation (conservative to avoid oversegmentation)
+        watershed_enabled=True,
+        watershed_min_distance_px=15,
+        watershed_apply_below_min_circ=True,
+        watershed_apply_above_max_area=True,
         cellpose_model_type="cpsam",
         cellpose_pretrained_model="organoid_cpsam",
         cellpose_diameter=None,
@@ -132,14 +137,19 @@ def brightfield_defaults() -> Dict[str, Any]:
 
 def fluorescence_defaults() -> Dict[str, Any]:
     return dict(
-        sigma_pre=14, dilate_iter=10, erode_iter=8, min_area_px=1_000,
+        sigma_pre=1, dilate_iter=1, erode_iter=1, min_area_px=1_000,
         max_area_px=10_000_000, min_circ=0.0, edge_margin=0.0,
-        pixel_size_um=1.0, overlay_width=11, return_images=True,
+        pixel_size_um=1.0, overlay_width=10, return_images=True,
         crop_overlay=False, crop_border_px=2, ring_px=20,
         invert_for_intensity=False, exclude_edge_particles=False,
         select_strategy="composite_filtered", area_filter_px=33_000,
         background_mode="inverse_of_composite", object_is_dark=False,
         ignore_zero_bins_for_mode_min=True,
+        # Watershed for FIJI-style fluorescence (disabled by default to be safe)
+        watershed_enabled=False,
+        watershed_min_distance_px=15,
+        watershed_apply_below_min_circ=True,
+        watershed_apply_above_max_area=True,
         cellpose_model_type="cpsam",
         cellpose_pretrained_model="organoid_cpsam",
         cellpose_diameter=None,
@@ -171,35 +181,78 @@ async def run_analysis(img: np.ndarray, params: Dict[str, Any], timings: Dict[st
                 payload = await anyio.to_thread.run_sync(func)
         
         with timed(timings, "postprocess_s"):
-            area_value = float(payload["results"]["area"])
+            # Handle both list (all ROIs) and dict (single ROI) formats for backward compatibility
+            results = payload["results"]
+            is_list_format = isinstance(results, list)
             
-            # Robust Day 0 check
-            is_baseline = is_baseline_day(day)
-            
-            if is_baseline:
-                growth_rate = 1.0
-            elif day0_area:
-                try:
-                    growth_rate = float(area_value) / float(day0_area)
-                except (ValueError, ZeroDivisionError, TypeError):
-                    growth_rate = None
+            if is_list_format:
+                # Process each ROI in the list
+                processed_results = []
+                for idx, roi_result in enumerate(results):
+                    area_value = float(roi_result["area"])
+                    
+                    # Robust Day 0 check
+                    is_baseline = is_baseline_day(day)
+                    
+                    if is_baseline:
+                        growth_rate = 1.0
+                    elif day0_area:
+                        try:
+                            growth_rate = float(area_value) / float(day0_area)
+                        except (ValueError, ZeroDivisionError, TypeError):
+                            growth_rate = None
+                    else:
+                        growth_rate = None
+                    
+                    roi_result.update({
+                        "day": str(day) if day is not None else "0",
+                        "organoidNumber": str(organoid_number) if organoid_number is not None else "1",
+                        "roiIndex": idx + 1,
+                        "growth_rate": growth_rate,
+                        "type": analysis_type,
+                        "analyze_s": timings.get("analyze_total_s"),
+                        "calculation_s": timings.get("postprocess_s"),
+                        "decode_rgb_s": timings.get("decode_rgb_s"),
+                        "total_request_s": round(sum(v for v in timings.values() if isinstance(v, (int, float))), 6)
+                    })
+                    processed_results.append(roi_result)
+                
+                payload["results"] = processed_results
+                # Log summary with largest ROI for compatibility
+                largest_roi = max(processed_results, key=lambda r: r.get("area", 0))
+                total_area = sum(r.get("area", 0) for r in processed_results)
+                logger.info(f"ANALYSIS SUCCESS: {label} | {len(processed_results)} ROIs | Total Area={total_area:.2f} | Largest Area={largest_roi.get('area', 0):.2f} | Growth={largest_roi.get('growth_rate')} | TotalTime={timings.get('analyze_total_s'):.3f}s")
             else:
-                growth_rate = None
+                # Backward compatibility: single ROI format
+                area_value = float(results["area"])
+                
+                # Robust Day 0 check
+                is_baseline = is_baseline_day(day)
+                
+                if is_baseline:
+                    growth_rate = 1.0
+                elif day0_area:
+                    try:
+                        growth_rate = float(area_value) / float(day0_area)
+                    except (ValueError, ZeroDivisionError, TypeError):
+                        growth_rate = None
+                else:
+                    growth_rate = None
 
-            payload["results"].update({
-                "day": str(day) if day is not None else "0",
-                "organoidNumber": str(organoid_number) if organoid_number is not None else "1",
-                "growth_rate": growth_rate,
-                "type": analysis_type,
-                "analyze_s": timings.get("analyze_total_s"),
-                "calculation_s": timings.get("postprocess_s"),
-                "decode_rgb_s": timings.get("decode_rgb_s"),
-                "total_request_s": round(sum(v for v in timings.values() if isinstance(v, (int, float))), 6)
-            })
+                payload["results"].update({
+                    "day": str(day) if day is not None else "0",
+                    "organoidNumber": str(organoid_number) if organoid_number is not None else "1",
+                    "growth_rate": growth_rate,
+                    "type": analysis_type,
+                    "analyze_s": timings.get("analyze_total_s"),
+                    "calculation_s": timings.get("postprocess_s"),
+                    "decode_rgb_s": timings.get("decode_rgb_s"),
+                    "total_request_s": round(sum(v for v in timings.values() if isinstance(v, (int, float))), 6)
+                })
+                logger.info(f"ANALYSIS SUCCESS: {label} | Area={payload['results'].get('area'):.2f} | Growth={growth_rate} | TotalTime={timings.get('analyze_total_s'):.3f}s")
+            
             if profile and prof:
                 payload["profile"] = prof.metrics
-        
-        logger.info(f"ANALYSIS SUCCESS: {label} | Area={payload['results'].get('area'):.2f} | Growth={growth_rate} | TotalTime={timings.get('analyze_total_s'):.3f}s")
         return payload
     except ValueError as e:
         logger.warning(f"Analysis validation error ({analysis_type}): {e}")
@@ -389,7 +442,12 @@ async def persist_one_result(run_id: str, filename: str, payload: Dict[str, Any]
             except Exception as e:
                 logger.error(f"Failed to upload Flow image: {e}")
     
-    analysis_type = payload.get("results", {}).get("type", "unknown")
+    # Get analysis_type from results (handle both list and dict formats)
+    results = payload.get("results", {})
+    if isinstance(results, list):
+        analysis_type = results[0].get("type", "unknown") if results else "unknown"
+    else:
+        analysis_type = results.get("type", "unknown")
     row = format_analysis_result(run_id, filename, payload, analysis_type)
     row.update({"roi_image_path": roi_url, "mask_image_path": mask_url})
     return row
@@ -570,22 +628,41 @@ async def process_job(run_id: str, filename: str, file_path: str, analysis_type:
         
         payload = await run_analysis(img, params, timings, "ASYNC", False, day_str, day0_area, org_num_str, analysis_type, segmentation_method=segmentation_method)
         
-        if is_baseline:
-            payload["results"]["growth_rate"] = 1.0
-
-        # Ensure growth_rate is in both casing formats for frontend compatibility
-        gr_val = payload["results"].get("growth_rate")
-        payload["results"]["growthRate"] = gr_val
+        # Handle both list and dict formats
+        results = payload["results"]
+        is_list_format = isinstance(results, list)
+        
+        if is_list_format:
+            # Update growth_rate for all ROIs
+            for roi_result in results:
+                if is_baseline:
+                    roi_result["growth_rate"] = 1.0
+                roi_result["growthRate"] = roi_result.get("growth_rate")
+            
+            # Use largest ROI for logging and baseline calculations
+            largest_roi = max(results, key=lambda r: r.get("area", 0))
+            gr_val = largest_roi.get("growth_rate")
+            area_value = float(largest_roi.get("area", 0))
+        else:
+            # Backward compatibility: single ROI format
+            if is_baseline:
+                payload["results"]["growth_rate"] = 1.0
+            gr_val = payload["results"].get("growth_rate")
+            payload["results"]["growthRate"] = gr_val
+            area_value = float(payload["results"].get("area", 0))
         
         row = await persist_one_result(run_id, filename, payload)
         supabase.table("analysis_results").insert(row).execute()
         
-        logger.info(f"JOB COMPLETED: {filename} | Area: {payload['results'].get('area')} | Growth Rate: {gr_val}")
+        if is_list_format:
+            total_area = sum(r.get("area", 0) for r in results)
+            logger.info(f"JOB COMPLETED: {filename} | {len(results)} ROIs | Total Area: {total_area:.2f} | Largest Area: {area_value:.2f} | Growth Rate: {gr_val}")
+        else:
+            logger.info(f"JOB COMPLETED: {filename} | Area: {area_value:.2f} | Growth Rate: {gr_val}")
 
         # If this was a baseline day, update any other results for the same organoid
         if is_baseline and run_id and org_num_str:
             try:
-                area_value = float(payload["results"]["area"])
                 logger.info(f"BASELINE DETECTED ({day_str}): Triggering backfill for organoid {org_num_str}")
                 
                 # Fetch sibling records

@@ -5,7 +5,17 @@ def get_supabase_client(url: str, key: str) -> Client:
     return create_client(url, key)
 
 def format_analysis_result(run_id: str, filename: str, payload: Dict[str, Any], analysis_type: str) -> Dict[str, Any]:
-    r = payload["results"]
+    results = payload["results"]
+    
+    # Handle both list (all ROIs) and dict (single ROI) formats
+    if isinstance(results, list):
+        # Use the largest ROI for main database fields
+        if not results:
+            raise ValueError("Results list is empty")
+        r = max(results, key=lambda x: x.get("area", 0))
+    else:
+        r = results
+    
     return {
         "run_id": run_id,
         "filename": filename,
@@ -58,6 +68,6 @@ def format_analysis_result(run_id: str, filename: str, payload: Dict[str, Any], 
         "calculation_s": r.get("calculation_s"),
         "decode_rgb_s": r.get("decode_rgb_s"),
         "total_request_s": r.get("total_request_s"),
-        "results_json": payload.get("results"),
+        "results_json": payload.get("results"),  # Store all ROIs in JSON
         "profile_json": payload.get("profile"),
     }
