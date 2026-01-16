@@ -1,0 +1,232 @@
+{
+ "cells": [
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "# Organoid Profiler Workflow Showcase\n",
+    "\n",
+    "This notebook demonstrates the core functionality of the `organoid-profiler` library, focusing on two different segmentation approaches:\n",
+    "1. **Fiji-inspired Masking**: A classical computer vision pipeline using thresholding and morphological operations.\n",
+    "2. **Cellpose cpsam**: A deep learning-based approach using the cpsam model.\n",
+    "\n",
+    "---"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "import os\n",
+    "import numpy as np\n",
+    "import matplotlib.pyplot as plt\n",
+    "from PIL import Image\n",
+    "from organoid_profiler.segmentation import build_segmentation_mask_fiji_style, build_segmentation_mask_cpsam\n",
+    "from organoid_profiler.imaging import convert_rgb_to_grayscale_uint8\n",
+    "from organoid_profiler.analysis import analyze_image\n",
+    "\n",
+    "# Set up plotting\n",
+    "%matplotlib inline\n",
+    "plt.rcParams['figure.figsize'] = [12, 8]\n",
+    "plt.rcParams['image.cmap'] = 'gray'"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "## 1. Load Sample Image\n",
+    "\n",
+    "We'll use a sample brightfield image from the dataset."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "IMAGE_PATH = \"dataset/2025-05-30_d10_02.jpg\"\n",
+    "\n",
+    "if not os.path.exists(IMAGE_PATH):\n",
+    "    print(f\"Image not found at {IMAGE_PATH}. Please check the path.\")\n",
+    "else:\n",
+    "    img = Image.open(IMAGE_PATH).convert(\"RGB\")\n",
+    "    img_array = np.array(img)\n",
+    "    \n",
+    "    plt.imshow(img_array)\n",
+    "    plt.title(f\"Original Image: {os.path.basename(IMAGE_PATH)}\")\n",
+    "    plt.axis('off')\n",
+    "    plt.show()"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "## 2. Option A: Fiji-inspired Segmentation\n",
+    "\n",
+    "This method uses `skimage` filters and morphological operations to create a binary mask."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "fiji_params = {\n",
+    "    \"gaussian_sigma\": 6.4,\n",
+    "    \"dilation_iterations\": 4,\n",
+    "    \"erosion_iterations\": 5,\n",
+    "    \"clear_border_artifacts\": True,\n",
+    "    \"object_is_dark\": True\n",
+    "}\n",
+    "\n",
+    "print(\"Running Fiji-style segmentation...\")\n",
+    "fiji_mask = build_segmentation_mask_fiji_style(img_array, **fiji_params)\n",
+    "\n",
+    "# Visualization\n",
+    "fig, axes = plt.subplots(1, 2, figsize=(15, 7))\n",
+    "axes[0].imshow(fiji_mask, cmap='jet')\n",
+    "axes[0].set_title(\"Binary Mask (Fiji-style)\")\n",
+    "axes[0].axis('off')\n",
+    "\n",
+    "axes[1].imshow(img_array)\n",
+    "axes[1].imshow(fiji_mask, alpha=0.3, cmap='jet')\n",
+    "axes[1].set_title(\"Overlay\")\n",
+    "axes[1].axis('off')\n",
+    "\n",
+    "plt.tight_layout()\n",
+    "plt.show()"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "## 3. Option B: Cellpose cpsam Segmentation\n",
+    "\n",
+    "This method leverages the pre-trained `cpsam` model from Cellpose. \n",
+    "Note: This requires `cellpose` to be installed."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "cpsam_params = {\n",
+    "    \"diameter\": None,  # Auto-estimate\n",
+    "    \"flow_threshold\": 0.4,\n",
+    "    \"cellprob_threshold\": 0.0,\n",
+    "    \"min_size\": 15,\n",
+    "    \"clear_border_artifacts\": True\n",
+    "}\n",
+    "\n",
+    "try:\n",
+    "    print(\"Running Cellpose cpsam segmentation...\")\n",
+    "    cpsam_mask = build_segmentation_mask_cpsam(img_array, **cpsam_params)\n",
+    "\n",
+    "    # Visualization\n",
+    "    fig, axes = plt.subplots(1, 2, figsize=(15, 7))\n",
+    "    axes[0].imshow(cpsam_mask, cmap='jet')\n",
+    "    axes[0].set_title(\"Binary Mask (cpsam)\")\n",
+    "    axes[0].axis('off')\n",
+    "\n",
+    "    axes[1].imshow(img_array)\n",
+    "    axes[1].imshow(cpsam_mask, alpha=0.3, cmap='jet')\n",
+    "    axes[1].set_title(\"Overlay\")\n",
+    "    axes[1].axis('off')\n",
+    "\n",
+    "    plt.tight_layout()\n",
+    "    plt.show()\n",
+    "except RuntimeError as e:\n",
+    "    print(f\"Error: {e}\")\n",
+    "except Exception as e:\n",
+    "    print(f\"Unexpected error: {e}\")"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "## 4. Analysis and Metrics\n",
+    "\n",
+    "Once we have a mask, we can calculate various morphological and intensity metrics using the `analyze_image` function."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# Example of running the full analysis pipeline with default brightfield parameters\n",
+    "analysis_params = {\n",
+    "    \"sigma_pre\": 6.4,\n",
+    "    \"dilate_iter\": 4,\n",
+    "    \"erode_iter\": 5,\n",
+    "    \"min_area_px\": 60000,\n",
+    "    \"max_area_px\": 20000000,\n",
+    "    \"min_circ\": 0.28,\n",
+    "    \"edge_margin\": 0.20,\n",
+    "    \"pixel_size_um\": 0.86,\n",
+    "    \"overlay_width\": 11,\n",
+    "    \"return_images\": True,\n",
+    "    \"crop_overlay\": False,\n",
+    "    \"crop_border_px\": 2,\n",
+    "    \"ring_px\": 20,\n",
+    "    \"invert_for_intensity\": True,\n",
+    "    \"exclude_edge_particles\": True,\n",
+    "    \"select_strategy\": \"largest\",\n",
+    "    \"area_filter_px\": None,\n",
+    "    \"background_mode\": \"ring\",\n",
+    "    \"object_is_dark\": True\n",
+    "}\n",
+    "\n",
+    "results = analyze_image(img_array, **analysis_params)\n",
+    "\n",
+    "print(\"--- Analysis Results ---\")\n",
+    "for key, value in results['results'].items():\n",
+    "    if isinstance(value, float):\n",
+    "        print(f\"{key:20}: {value:.4f}\")\n",
+    "    else:\n",
+    "        print(f\"{key:20}: {value}\")"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "## Summary\n",
+    "The `organoid-profiler` library provides flexible options for segmenting organoids and extracting meaningful metrics. The choice between Fiji-style and Cellpose depends on the image quality, organoid density, and computational resources available."
+   ]
+  }
+ ],
+ "metadata": {
+  "kernelspec": {
+   "display_name": "Python 3",
+   "language": "python",
+   "name": "python3"
+  },
+  "language_info": {
+   "codemirror_mode": {
+    "name": "ipython",
+    "version": 3
+   },
+   "file_extension": ".py",
+   "mimetype": "text/x-python",
+   "name": "python",
+   "nbconvert_exporter": "python",
+   "pygments_lexer": "ipython3",
+   "version": "3.12.0"
+  }
+ },
+ "nbformat": 4,
+ "nbformat_minor": 4
+}
+

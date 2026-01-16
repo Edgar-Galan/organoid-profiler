@@ -42,6 +42,12 @@ class Settings(BaseSettings):
     SUPABASE_URL: str
     SUPABASE_KEY: str
     SUPABASE_BUCKET: str = "orgprofiler"
+    
+    SMTP_HOST: Optional[str] = None
+    SMTP_PORT: int = 587
+    SMTP_USER: Optional[str] = None
+    SMTP_PASSWORD: Optional[str] = None
+    NOTIFICATION_EMAIL: Optional[str] = None
 
     @field_validator("SUPABASE_URL", "SUPABASE_KEY", mode="before")
     @classmethod
@@ -406,6 +412,64 @@ async def analyze_unified(
         )
 
 # ----------------------------
+# Notifications
+# ----------------------------
+
+async def send_completion_email(run_id: str, run_name: str, image_count: int):
+    """
+    Sends a notification email when an analysis run is completed.
+    """
+    if not settings.SMTP_HOST or not settings.SMTP_USER or not settings.SMTP_PASSWORD:
+        logger.warning("SMTP settings not configured. Skipping completion email.")
+        return
+
+    try:
+        import smtplib
+        from email.message import EmailMessage
+
+        # Extract project ID from Supabase URL for dashboard link
+        # e.g. https://abc.supabase.co -> abc
+        project_id = settings.SUPABASE_URL.split("//")[1].split(".")[0]
+        
+        storage_link = f"https://supabase.com/dashboard/project/{project_id}/storage/buckets/{settings.SUPABASE_BUCKET}?path=runs%2F{run_id}"
+        results_link = f"https://www.organoid-profiler.com/app/history/{run_id}" # Assuming production URL
+
+        msg = EmailMessage()
+        msg["Subject"] = f"Organoid Profiler: Run Completed - {run_name}"
+        msg["From"] = settings.SMTP_USER
+        msg["To"] = settings.NOTIFICATION_EMAIL
+
+        body = f"""
+An organoid analysis run has been completed.
+
+Run Details:
+------------
+Name: {run_name}
+Run ID: {run_id}
+Images Processed: {image_count}
+Completed At: {datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}
+
+Links:
+------
+Supabase Storage (Images): {storage_link}
+View Results (App): {results_link}
+
+Note: Images will be deleted in 24 hours per the data retention policy.
+        """
+        msg.set_content(body)
+
+        def do_send():
+            with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT) as server:
+                server.starttls()
+                server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
+                server.send_message(msg)
+
+        await anyio.to_thread.run_sync(do_send)
+        logger.info(f"Completion email sent for run {run_id} to {settings.NOTIFICATION_EMAIL}")
+    except Exception as e:
+        logger.error(f"Failed to send completion email for run {run_id}: {e}")
+
+# ----------------------------
 # Persistence
 # ----------------------------
 
@@ -489,7 +553,7 @@ def create_run(name: str = Body(embed=True), user_id: Optional[str] = Body(defau
     return {"run_id": run_id, "status": "pending"}
 
 class RunStatusBody(BaseModel):
-    status: Literal["running","completed","failed","canceled"]
+    status: Literal["running","completed","failed","canceled","expired"]
 
 @api.post("/runs/{run_id}/status")
 def set_run_status(run_id: str, body: RunStatusBody):
@@ -719,6 +783,19 @@ async def process_job(run_id: str, filename: str, file_path: str, analysis_type:
                         "status": "completed", 
                         "completed_at": datetime.datetime.now(datetime.timezone.utc).isoformat()
                     }).eq("id", run_id).execute()
+                    
+                    # Fetch run details for the email
+                    try:
+                        run_info = supabase.table("analysis_runs").select("name, total_files").eq("id", run_id).single().execute()
+                        if run_info.data:
+                            # Send notification email in the background
+                            asyncio.create_task(send_completion_email(
+                                run_id=run_id,
+                                run_name=run_info.data.get("name", "Unknown Run"),
+                                image_count=run_info.data.get("total_files") or current_count
+                            ))
+                    except Exception as email_err:
+                        logger.error(f"Failed to trigger completion email for {run_id}: {email_err}")
             else:
                 logger.warning(f"Could not determine total_files for run {run_id}. Completion check skipped.")
         except Exception as e:
@@ -736,8 +813,87 @@ async def process_job(run_id: str, filename: str, file_path: str, analysis_type:
                 logger.error(f"Failed to delete temp file {file_path}: {e}")
 
 # ----------------------------
-# Background Worker
+# Background Workers
 # ----------------------------
+
+async def cleanup_worker():
+    """
+    Background task that deletes data older than 24 hours from Supabase.
+    Runs every hour.
+    """
+    logger.info("CLEANUP WORKER: Started and running every hour...")
+    while True:
+        try:
+            # Calculate the cutoff time (24 hours ago)
+            cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=24)
+            cutoff_iso = cutoff.isoformat()
+            
+            logger.info(f"CLEANUP WORKER: Checking for runs older than {cutoff_iso}")
+            
+            # 1. Find runs older than 24 hours
+            # Use created_at as the reference for the 24h retention policy
+            res = supabase.table("analysis_runs").select("id").lt("created_at", cutoff_iso).execute()
+            old_runs = res.data
+            
+            if old_runs:
+                logger.info(f"CLEANUP WORKER: Found {len(old_runs)} old runs to delete")
+                
+                for run in old_runs:
+                    run_id = run["id"]
+                    logger.info(f"CLEANUP WORKER: Deleting data for run {run_id}")
+                    
+                    # 2. Delete storage objects
+                    try:
+                        bucket = settings.SUPABASE_BUCKET
+                        prefix = f"runs/{run_id}"
+                        
+                        # List all files in the run folder
+                        # Note: We use a high limit to ensure we catch all images in the run
+                        files_res = supabase.storage.from_(bucket).list(prefix, options={"limit": 1000})
+                        if files_res:
+                            # Prepend the prefix to each filename for removal
+                            file_paths = [f"{prefix}/{f['name']}" for f in files_res]
+                            if file_paths:
+                                supabase.storage.from_(bucket).remove(file_paths)
+                                logger.debug(f"CLEANUP WORKER: Deleted {len(file_paths)} storage objects for run {run_id}")
+                    except Exception as e:
+                        logger.error(f"CLEANUP WORKER: Failed to delete storage for run {run_id}: {e}")
+                    
+                    # We set the image paths to None and update the run status
+                    try:
+                        supabase.table("analysis_results").update({
+                            "roi_image_path": None, 
+                            "mask_image_path": None
+                        }).eq("run_id", run_id).execute()
+                        
+                        # Update run status to indicate storage was cleared
+                        supabase.table("analysis_runs").update({
+                            "status": "expired" 
+                        }).eq("id", run_id).execute()
+                        
+                        logger.info(f"CLEANUP WORKER: Marked database records as expired for run {run_id}")
+                    except Exception as e:
+                        logger.error(f"CLEANUP WORKER: Failed to update database records for run {run_id}: {e}")
+            else:
+                logger.info("CLEANUP WORKER: No old runs found")
+            
+            # 4. Cleanup local temp_uploads
+            try:
+                now = time.time()
+                for f in os.listdir(UPLOAD_DIR):
+                    fpath = os.path.join(UPLOAD_DIR, f)
+                    if os.stat(fpath).st_mtime < now - 86400: # Older than 24h
+                        if os.path.isfile(fpath):
+                            os.remove(fpath)
+                            logger.info(f"CLEANUP WORKER: Deleted old local temp file {f}")
+            except Exception as e:
+                logger.error(f"CLEANUP WORKER: Local temp cleanup failed: {e}")
+                
+        except Exception as e:
+            logger.exception(f"CLEANUP WORKER: Unexpected error in cleanup loop: {e}")
+            
+        # Wait for 1 hour before next run
+        await asyncio.sleep(3600)
 
 async def analysis_worker():
     """
@@ -772,8 +928,9 @@ async def analysis_worker():
 
 @api.on_event("startup")
 async def startup_event():
-    # Start the background worker task
+    # Start the background worker tasks
     asyncio.create_task(analysis_worker())
+    # asyncio.create_task(cleanup_worker())
 
 @api.post("/runs/{run_id}/submit-jobs")
 async def submit_jobs(
