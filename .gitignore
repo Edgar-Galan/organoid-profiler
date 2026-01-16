@@ -1,0 +1,5 @@
+dataset/*
+temp_uploads/*
+test/*
+models/*
+cellpose_test_results/*
