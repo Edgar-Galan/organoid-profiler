@@ -42,6 +42,9 @@ class Settings(BaseSettings):
     SUPABASE_URL: str
     SUPABASE_KEY: str
     SUPABASE_BUCKET: str = "orgprofiler"
+    SUPABASE_PUBLIC_URL: Optional[str] = None
+    SUPABASE_PROJECT_ID: Optional[str] = None
+    FRONTEND_URL: str = "https://www.organoid-profiler.com"
     
     SMTP_HOST: Optional[str] = None
     SMTP_PORT: int = 587
@@ -427,12 +430,21 @@ async def send_completion_email(run_id: str, run_name: str, image_count: int):
         import smtplib
         from email.message import EmailMessage
 
-        # Extract project ID from Supabase URL for dashboard link
-        # e.g. https://abc.supabase.co -> abc
-        project_id = settings.SUPABASE_URL.split("//")[1].split(".")[0]
+
+        project_id = settings.SUPABASE_PROJECT_ID
+        if not project_id:
+            try:
+                url_for_id = settings.SUPABASE_PUBLIC_URL or settings.SUPABASE_URL
+                host = url_for_id.split("//")[-1].split("/")[0]
+                project_id = host.split(".")[0]
+            except Exception:
+                project_id = "unknown"
         
         storage_link = f"https://supabase.com/dashboard/project/{project_id}/storage/buckets/{settings.SUPABASE_BUCKET}?path=runs%2F{run_id}"
-        results_link = f"https://www.organoid-profiler.com/app/history/{run_id}" # Assuming production URL
+        results_link = f"{settings.FRONTEND_URL.rstrip('/')}/app/history/{run_id}"
+
+        public_base = (settings.SUPABASE_PUBLIC_URL or settings.SUPABASE_URL).rstrip("/")
+        public_storage_link = f"{public_base}/storage/v1/object/public/{settings.SUPABASE_BUCKET}/runs/{run_id}"
 
         msg = EmailMessage()
         msg["Subject"] = f"Organoid Profiler: Run Completed - {run_name}"
@@ -451,9 +463,12 @@ Completed At: {datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %
 
 Links:
 ------
-Supabase Storage (Images): {storage_link}
 View Results (App): {results_link}
+API Reference: https://organoid-profiler.com/docs
+Supabase Storage (Admin): {storage_link}
+Supabase Storage (Public): {public_storage_link}
 
+Note: If the bucket is public, images can be viewed directly in the App link above.
 Note: Images will be deleted in 24 hours per the data retention policy.
         """
         msg.set_content(body)
@@ -473,15 +488,18 @@ Note: Images will be deleted in 24 hours per the data retention policy.
 # Persistence
 # ----------------------------
 
-async def persist_one_result(run_id: str, filename: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+async def persist_one_result(run_id: str, filename: str, payload: Dict[str, Any], original_file_path: Optional[str] = None) -> Dict[str, Any]:
     bucket = settings.SUPABASE_BUCKET
     # Remove existing extension and use underscores for cleaner paths
     base_name = os.path.splitext(filename)[0] if filename else "image"
+    ext = os.path.splitext(filename)[1] or ".png"
+    
     roi_path = f"runs/{run_id}/{base_name}_roi.png"
     mask_path = f"runs/{run_id}/{base_name}_mask.png"
     flow_path = f"runs/{run_id}/{base_name}_flow.png"
+    original_path = f"runs/{run_id}/{base_name}_original{ext}"
 
-    async with StorageUploader(settings.SUPABASE_URL, settings.SUPABASE_KEY) as up:
+    async with StorageUploader(settings.SUPABASE_URL, settings.SUPABASE_KEY, settings.SUPABASE_PUBLIC_URL) as up:
         roi_url = None
         roi_img = payload.get("roi_image")
         if isinstance(roi_img, str) and "," in roi_img:
@@ -505,6 +523,21 @@ async def persist_one_result(run_id: str, filename: str, payload: Dict[str, Any]
                 flow_url = await up.upload_png_dataurl(bucket, flow_path, flow_img)
             except Exception as e:
                 logger.error(f"Failed to upload Flow image: {e}")
+
+        # Upload original image if path is provided
+        original_url = None
+        if original_file_path and os.path.exists(original_file_path):
+            try:
+                # Guess content type or default to image/png
+                content_type = "image/png"
+                if filename.lower().endswith(".jpg") or filename.lower().endswith(".jpeg"):
+                    content_type = "image/jpeg"
+                elif filename.lower().endswith(".tif") or filename.lower().endswith(".tiff"):
+                    content_type = "image/tiff"
+                
+                original_url = await up.upload_file(bucket, original_path, original_file_path, content_type)
+            except Exception as e:
+                logger.error(f"Failed to upload original image: {e}")
     
     # Get analysis_type from results (handle both list and dict formats)
     results = payload.get("results", {})
@@ -513,7 +546,11 @@ async def persist_one_result(run_id: str, filename: str, payload: Dict[str, Any]
     else:
         analysis_type = results.get("type", "unknown")
     row = format_analysis_result(run_id, filename, payload, analysis_type)
-    row.update({"roi_image_path": roi_url, "mask_image_path": mask_url})
+    row.update({
+        "roi_image_path": roi_url, 
+        "mask_image_path": mask_url,
+        "original_image_path": original_url
+    })
     return row
 
 class PersistItem(BaseModel):
@@ -774,7 +811,7 @@ async def process_job(run_id: str, filename: str, file_path: str, analysis_type:
             payload["results"]["growthRate"] = gr_val
             area_value = float(payload["results"].get("area", 0))
         
-        row = await persist_one_result(run_id, filename, payload)
+        row = await persist_one_result(run_id, filename, payload, original_file_path=file_path)
         supabase.table("analysis_results").insert(row).execute()
         
         if is_list_format:

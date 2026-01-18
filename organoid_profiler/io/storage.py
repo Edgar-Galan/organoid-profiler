@@ -3,9 +3,10 @@ import base64
 from typing import Optional
 from loguru import logger
 class StorageUploader:
-    def __init__(self, supabase_url: str, supabase_key: str):
+    def __init__(self, supabase_url: str, supabase_key: str, public_url: Optional[str] = None):
         self.base = supabase_url.rstrip("/")
         self.key  = supabase_key
+        self.public_base = (public_url or supabase_url).rstrip("/")
         self._client: Optional[httpx.AsyncClient] = None
 
     async def __aenter__(self):
@@ -49,5 +50,29 @@ class StorageUploader:
                 error_detail = resp.text
             raise Exception(f"Supabase Storage Error ({resp.status_code}): {error_detail}")
 
-        return f"{self.base}/storage/v1/object/public/{bucket}/{path}"
+        return f"{self.public_base}/storage/v1/object/public/{bucket}/{path}"
+
+    async def upload_file(self, bucket: str, path: str, local_path: str, content_type: str = "image/png") -> str:
+        assert self._client is not None
+        import os
+        if not os.path.exists(local_path):
+            raise FileNotFoundError(f"Local file not found: {local_path}")
+        
+        with open(local_path, "rb") as f:
+            body = f.read()
+
+        url = f"{self.base}/storage/v1/object/{bucket}/{path}"
+        resp = await self._client.post(
+            url,
+            headers={"Content-Type": content_type, "x-upsert": "true"},
+            content=body,
+        )
+        if resp.status_code != 200:
+            try:
+                error_detail = resp.json()
+            except:
+                error_detail = resp.text
+            raise Exception(f"Supabase Storage Error ({resp.status_code}): {error_detail}")
+
+        return f"{self.public_base}/storage/v1/object/public/{bucket}/{path}"
 
