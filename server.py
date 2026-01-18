@@ -650,6 +650,65 @@ async def download_result_images(result_id: str):
         headers={"Content-Disposition": f"attachment; filename={base_name}_images.zip"}
     )
 
+@api.get("/runs/{run_id}/download-images")
+async def download_run_images(run_id: str):
+    """
+    Download ALL ROI and Mask images for a whole run as a ZIP file.
+    """
+    logger.info(f"[DOWNLOAD-RUN-IMAGES] Fetching all images for run {run_id}")
+    
+    # Get all results for this run
+    res = supabase.table("analysis_results").select("filename, roi_image_path, mask_image_path").eq("run_id", run_id).execute()
+    if getattr(res, "error", None) or not res.data:
+        raise HTTPException(404, f"No results found for run {run_id}")
+    
+    # Create ZIP in memory
+    zip_buffer = io.BytesIO()
+    
+    async with httpx.AsyncClient() as client:
+        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+            for item in res.data:
+                filename = item.get("filename", "image")
+                roi_url = item.get("roi_image_path")
+                mask_url = item.get("mask_image_path")
+                
+                if not roi_url or not mask_url:
+                    continue
+                
+                # Download images
+                try:
+                    # ROI
+                    roi_resp = await client.get(roi_url)
+                    if roi_resp.status_code == 200:
+                        base_name = os.path.splitext(filename)[0]
+                        zip_file.writestr(f"roi/{base_name}_roi.png", roi_resp.content)
+                    
+                    # Mask
+                    mask_resp = await client.get(mask_url)
+                    if mask_resp.status_code == 200:
+                        base_name = os.path.splitext(filename)[0]
+                        zip_file.writestr(f"mask/{base_name}_mask.png", mask_resp.content)
+                except Exception as e:
+                    logger.warning(f"Failed to download image for {filename}: {e}")
+                    continue
+    
+    zip_buffer.seek(0)
+    
+    # Try to get run name for filename
+    try:
+        run_res = supabase.table("analysis_runs").select("name").eq("id", run_id).single().execute()
+        run_name = run_res.data.get("name", "batch") if run_res.data else "batch"
+    except:
+        run_name = "batch"
+        
+    safe_run_name = "".join([c if c.isalnum() else "_" for c in run_name])
+    
+    return StreamingResponse(
+        zip_buffer,
+        media_type="application/x-zip-compressed",
+        headers={"Content-Disposition": f"attachment; filename={safe_run_name}_all_images.zip"}
+    )
+
 # ----------------------------
 # Async Job Submission
 # ----------------------------
