@@ -465,6 +465,9 @@ Links:
 ------
 View Results (App): {results_link}
 API Reference: https://organoid-profiler.com/docs
+Supabase Storage (Admin): {storage_link}
+Supabase Storage (Public): {public_storage_link}
+
         """
         msg.set_content(body)
 
