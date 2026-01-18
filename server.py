@@ -452,8 +452,8 @@ async def send_completion_email(run_id: str, run_name: str, image_count: int):
         msg["To"] = settings.NOTIFICATION_EMAIL
 
         body = f"""
-An organoid analysis run has been completed.
 
+It is completed !
 Run Details:
 ------------
 Name: {run_name}
@@ -465,11 +465,6 @@ Links:
 ------
 View Results (App): {results_link}
 API Reference: https://organoid-profiler.com/docs
-Supabase Storage (Admin): {storage_link}
-Supabase Storage (Public): {public_storage_link}
-
-Note: If the bucket is public, images can be viewed directly in the App link above.
-Note: Images will be deleted in 24 hours per the data retention policy.
         """
         msg.set_content(body)
 
@@ -490,7 +485,6 @@ Note: Images will be deleted in 24 hours per the data retention policy.
 
 async def persist_one_result(run_id: str, filename: str, payload: Dict[str, Any], original_file_path: Optional[str] = None) -> Dict[str, Any]:
     bucket = settings.SUPABASE_BUCKET
-    # Remove existing extension and use underscores for cleaner paths
     base_name = os.path.splitext(filename)[0] if filename else "image"
     ext = os.path.splitext(filename)[1] or ".png"
     
@@ -524,11 +518,9 @@ async def persist_one_result(run_id: str, filename: str, payload: Dict[str, Any]
             except Exception as e:
                 logger.error(f"Failed to upload Flow image: {e}")
 
-        # Upload original image if path is provided
         original_url = None
         if original_file_path and os.path.exists(original_file_path):
             try:
-                # Guess content type or default to image/png
                 content_type = "image/png"
                 if filename.lower().endswith(".jpg") or filename.lower().endswith(".jpeg"):
                     content_type = "image/jpeg"
