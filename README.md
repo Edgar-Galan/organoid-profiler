@@ -7,7 +7,7 @@ A tool for automated, quantitative characterization of morphological features an
 - **Demo:** [Jupyter Notebook Workflow](https://github.com/Edgar-Galan/organoid-profiler/blob/main/workflow.ipynb)
     
 
-> Citation:
+
 > 
 > This code accompanies the manuscript: "Automated, high-throughput and quantitative morphological characterization uncovers conserved longitudinal developmental kinetics in microfluidics-engineered organoids" by Galan et al. (Under review at Nature Communications).
 > 
