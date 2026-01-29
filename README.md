@@ -9,7 +9,7 @@ A tool for automated, quantitative characterization of morphological features an
 
 
 > 
-> This code accompanies the manuscript: "Automated, high-throughput and quantitative morphological characterization uncovers conserved longitudinal developmental kinetics in microfluidics-engineered organoids" by Galan et al. (Under review at Nature Communications).
+> This code accompanies the manuscript: "Automated, high-throughput and quantitative morphological characterization uncovers conserved longitudinal developmental kinetics in microfluidics-engineered organoids" by Galan et al. (Under review).
 > 
 > Full-text preprint available at BioRxiv: [10.64898/2026.01.01.694533v1](https://www.biorxiv.org/content/10.64898/2026.01.01.694533v1).
 
