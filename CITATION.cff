@@ -65,7 +65,10 @@ preferred-citation:
   journal: "Device"
   year: 2026
   status: "under review"
-  identifiers:
+identifiers:
     - type: doi
-      value: "10.64898/2026.01.01.694533v1"
+      value: "10.64898/2026.01.01.694533"
       description: "bioRxiv preprint"
+    - type: doi
+      value: "10.5281/zenodo.19188708"
+      description: "Software archive on Zenodo"
