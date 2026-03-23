@@ -1,3 +1,5 @@
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.19188709.svg)](https://doi.org/10.5281/zenodo.19188709)
+
 # Organoid Profiler
 
 A tool for automated, quantitative characterization of morphological features and fluorescence signals in organoid and spheroid cultures.
